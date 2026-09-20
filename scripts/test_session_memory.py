@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 
 from dialogue_state import analyze
+from memory_graph import project
 from session_memory import GroqMemoryCompressor, build, ensure_open_tail_question
 
 
@@ -61,6 +62,15 @@ def check_session_memory():
     assert memory["working_memory"][0]["text"] == "C还有一点"
     assert memory["scene"]["topics"][0]["evidence_turn_ids"] == ["turn-000002"]
     assert memory["stats"]["completed_turns"] == 2
+    graph = project(memory)
+    assert graph["counts"] == {
+        "speakers": 3, "topics": 2, "opinions": 2, "intents": 2, "pending": 1}
+    assert {item["type"] for item in graph["nodes"]} == {
+        "speaker", "topic", "opinion", "intent"}
+    assert [(item["type"], item["turn_id"]) for item in graph["edges"]].count(
+        ("EXPRESSES", "turn-000002")) == 1
+    assert not any(item["type"] == "opinion" and "C还有一点" in item["label"]
+                   for item in graph["nodes"])
     tail_scene = {"open_questions": []}
     tail_turns = [{"id": "turn-000001", "speaker": "A"}]
     tail_analyses = {"turn-000001": {"speech_act": "question", "summary": "A询问下一步怎么做。"}}

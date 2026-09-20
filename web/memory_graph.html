@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>会话记忆图</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09111f; --panel: #101b2e; --line: #263752; --text: #eef5ff;
+      --muted: #91a3bb; --speaker: #54c7ec; --topic: #c99cff;
+      --opinion: #ffca6b; --intent: #78e6ad; --danger: #ff7c8b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at 20% 0, #152641, var(--bg) 46%); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+    header { padding: 28px 32px 18px; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0; font-size: clamp(24px, 4vw, 38px); letter-spacing: -.04em; }
+    #summary { color: var(--muted); max-width: 900px; margin: 8px 0 0; }
+    .status { display: flex; gap: 10px; align-items: center; margin-top: 16px; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--intent); box-shadow: 0 0 12px var(--intent); }
+    .dot.error { background: var(--danger); box-shadow: 0 0 12px var(--danger); }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: calc(100vh - 150px); }
+    .canvas { min-width: 0; overflow: auto; padding: 18px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .pill { background: #17253b; border: 1px solid var(--line); border-radius: 999px; padding: 6px 11px; color: var(--muted); }
+    .pill b { color: var(--text); }
+    .graph-shell { min-width: 920px; background: color-mix(in srgb, var(--panel) 82%, transparent); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+    .column-heads { display: grid; grid-template-columns: 18% 23% 36% 23%; padding: 13px 22px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .14em; }
+    svg { display: block; width: 100%; min-height: 580px; }
+    .edge { fill: none; stroke: #48617f; stroke-width: 1.5; opacity: .52; transition: opacity .15s, stroke-width .15s; }
+    .edge.about { stroke: var(--topic); opacity: .34; }
+    .edge.intends { stroke: var(--intent); opacity: .42; }
+    .edge.active { opacity: 1; stroke-width: 3; }
+    .node { cursor: pointer; outline: none; }
+    .node rect { fill: #132238; stroke-width: 1.5; transition: filter .15s, stroke-width .15s; }
+    .node:hover rect, .node:focus rect, .node.active rect { filter: brightness(1.25); stroke-width: 3; }
+    .node text { fill: var(--text); pointer-events: none; }
+    .node .sub { fill: var(--muted); font-size: 11px; }
+    .node.speaker rect { stroke: var(--speaker); }
+    .node.topic rect { stroke: var(--topic); }
+    .node.opinion rect { stroke: var(--opinion); }
+    .node.intent rect { stroke: var(--intent); }
+    aside { border-left: 1px solid var(--line); background: rgba(9,17,31,.72); padding: 24px; }
+    aside h2 { margin: 0 0 4px; font-size: 19px; }
+    aside p { color: var(--muted); overflow-wrap: anywhere; }
+    dl { margin: 22px 0 0; }
+    dt { color: var(--muted); font-size: 12px; margin-top: 14px; }
+    dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+    .pending { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .pending-item { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
+    .pending-item b { color: var(--text); }
+    @media (max-width: 900px) { main { display: block; } aside { border: 0; border-top: 1px solid var(--line); } header { padding-inline: 20px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">会话记忆图</h1>
+    <p id="summary">正在读取 session_memory.json…</p>
+    <div class="status"><span id="dot" class="dot"></span><span id="status">正在连接</span></div>
+  </header>
+  <main>
+    <section class="canvas">
+      <div id="counts" class="toolbar"></div>
+      <div class="graph-shell">
+        <div class="column-heads"><span>人物</span><span>话题</span><span>观点</span><span>意图</span></div>
+        <svg id="graph" role="img" aria-label="人物、话题、观点和意图关系图"></svg>
+      </div>
+    </section>
+    <aside>
+      <h2 id="detail-title">选择一个节点</h2>
+      <p id="detail-kind">点击图中的节点查看证据和属性。</p>
+      <dl id="details"></dl>
+      <section class="pending">
+        <h2>待完成发言</h2>
+        <div id="pending"></div>
+      </section>
+    </aside>
+  </main>
+  <script>
+    const NS = 'http://www.w3.org/2000/svg';
+    const graph = document.querySelector('#graph');
+    let etag = '', selected = null;
+
+    function svg(name, attrs = {}) {
+      const el = document.createElementNS(NS, name);
+      for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+      return el;
+    }
+    function textWidth(value) {
+      return [...value].reduce((n, c) => n + (/^[\x00-\xff]$/.test(c) ? .55 : 1), 0);
+    }
+    function wrap(value, limit, maxLines) {
+      const lines = []; let line = '';
+      for (const char of [...String(value)]) {
+        if (line && textWidth(line + char) > limit) { lines.push(line); line = char; }
+        else line += char;
+        if (lines.length === maxLines - 1) break;
+      }
+      const used = lines.join('').length + line.length;
+      if (used < [...String(value)].length) line = line.replace(/.$/, '…');
+      lines.push(line);
+      return lines;
+    }
+    function positions(nodes) {
+      const specs = {
+        speaker: {x: 35, w: 190}, topic: {x: 285, w: 235},
+        opinion: {x: 585, w: 350}, intent: {x: 1000, w: 220},
+      };
+      const groups = Object.fromEntries(Object.keys(specs).map(k => [k, nodes.filter(n => n.type === k)]));
+      const rows = Math.max(1, ...Object.values(groups).map(items => items.length));
+      const height = Math.max(580, rows * 116 + 60);
+      const result = new Map();
+      for (const [kind, items] of Object.entries(groups)) {
+        const spec = specs[kind], total = items.length * 96 + Math.max(0, items.length - 1) * 20;
+        const first = Math.max(30, (height - total) / 2);
+        items.forEach((node, i) => result.set(node.id, {...spec, y: first + i * 116, h: 96}));
+      }
+      return {result, height};
+    }
+    function showDetails(node) {
+      selected = node.id;
+      document.querySelector('#detail-title').textContent = node.label;
+      document.querySelector('#detail-kind').textContent = {speaker:'人物', topic:'话题', opinion:'观点', intent:'意图'}[node.type];
+      const list = document.querySelector('#details'); list.replaceChildren();
+      for (const [key, value] of Object.entries(node.details || {})) {
+        const dt = document.createElement('dt'), dd = document.createElement('dd');
+        dt.textContent = key; dd.textContent = Array.isArray(value) ? (value.join('、') || '无') : String(value);
+        list.append(dt, dd);
+      }
+      document.querySelectorAll('.node').forEach(el => el.classList.toggle('active', el.dataset.id === node.id));
+      document.querySelectorAll('.edge').forEach(el => el.classList.toggle('active', el.dataset.source === node.id || el.dataset.target === node.id));
+    }
+    function render(data) {
+      document.querySelector('#title').textContent = data.session.id;
+      document.querySelector('#summary').textContent = data.session.summary;
+      const names = {speakers:'人物', topics:'话题', opinions:'观点', intents:'意图', pending:'待完成'};
+      const counts = document.querySelector('#counts'); counts.replaceChildren();
+      for (const [key, value] of Object.entries(data.counts)) {
+        const pill = document.createElement('span'); pill.className = 'pill';
+        pill.append(names[key] + ' ', Object.assign(document.createElement('b'), {textContent: value})); counts.append(pill);
+      }
+      const pending = document.querySelector('#pending'); pending.replaceChildren();
+      if (!data.working_memory.length) pending.textContent = '无';
+      for (const item of data.working_memory) {
+        const div = document.createElement('div'); div.className = 'pending-item';
+        const who = document.createElement('b'); who.textContent = item.speaker + '：';
+        div.append(who, document.createTextNode(item.text || '尚无文字')); pending.append(div);
+      }
+
+      graph.replaceChildren();
+      const {result: pos, height} = positions(data.nodes);
+      graph.setAttribute('viewBox', `0 0 1260 ${height}`);
+      graph.style.height = `${height}px`;
+      for (const edge of data.edges) {
+        const a = pos.get(edge.source), b = pos.get(edge.target); if (!a || !b) continue;
+        const fromX = a.x + a.w, fromY = a.y + a.h / 2, toX = b.x, toY = b.y + b.h / 2;
+        const bend = Math.max(35, Math.abs(toX - fromX) * .42);
+        const path = svg('path', {d:`M${fromX},${fromY} C${fromX+bend},${fromY} ${toX-bend},${toY} ${toX},${toY}`,
+          class:`edge ${edge.type.toLowerCase()}`, 'data-source':edge.source, 'data-target':edge.target});
+        graph.append(path);
+      }
+      for (const node of data.nodes) {
+        const p = pos.get(node.id), group = svg('g', {class:`node ${node.type}`, tabindex:'0', role:'button', 'data-id':node.id});
+        group.append(svg('rect', {x:p.x, y:p.y, width:p.w, height:p.h, rx:13}));
+        const label = svg('text', {x:p.x+15, y:p.y+28});
+        wrap(node.label, node.type === 'opinion' ? 25 : 16, 3).forEach((line, i) => {
+          const span = svg('tspan', {x:p.x+15, dy:i ? 20 : 0}); span.textContent = line; label.append(span);
+        });
+        group.append(label);
+        const sub = svg('text', {x:p.x+15, y:p.y+p.h-12, class:'sub'});
+        sub.textContent = node.type === 'opinion' ? `${node.details.人物} · ${node.details.时间}` : ({speaker:'人物',topic:'话题',intent:'意图'}[node.type]);
+        group.append(sub);
+        group.addEventListener('click', () => showDetails(node));
+        group.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') showDetails(node); });
+        graph.append(group);
+      }
+      const same = data.nodes.find(node => node.id === selected);
+      if (same) showDetails(same);
+    }
+    async function refresh() {
+      try {
+        const response = await fetch('/api/graph', {cache:'no-store', headers: etag ? {'If-None-Match': etag} : {}});
+        if (response.status === 304) return setStatus('实时同步中', false);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        etag = response.headers.get('ETag') || ''; render(data); setStatus(`已更新 · ${new Date().toLocaleTimeString()}`, false);
+      } catch (error) { setStatus(`读取失败：${error.message}`, true); }
+    }
+    function setStatus(message, error) {
+      document.querySelector('#status').textContent = message;
+      document.querySelector('#dot').classList.toggle('error', error);
+    }
+    refresh(); setInterval(refresh, 1000);
+  </script>
+</body>
+</html>

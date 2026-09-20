@@ -229,6 +229,12 @@ def main():
     p.add_argument("--memory-proxy", help="Optional HTTPS proxy URL for the memory provider")
     p.add_argument("--output")
     p.set_defaults(func=lambda a: importlib.import_module("session_memory").run(a))
+    p = sub.add_parser("visualize-memory", help="Watch session memory and serve a live relationship graph")
+    p.add_argument("session_memory")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-open", action="store_true", help="Do not open the graph in a browser")
+    p.set_defaults(func=lambda a: importlib.import_module("memory_graph").run(a))
     args = parser.parse_args()
     try:
         return args.func(args)

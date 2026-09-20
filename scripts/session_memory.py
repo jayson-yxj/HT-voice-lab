@@ -318,6 +318,8 @@ def run(args):
     result = build(dialogue, source, session_id, compressor)
     target = Path(args.output) if args.output else source.with_name("session_memory.json")
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(target)
     print(target)
     return 0

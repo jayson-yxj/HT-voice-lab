@@ -61,7 +61,7 @@ flowchart LR
     C -- "否" --> D["working_memory"]
     C -- "是" --> E["压缩为 turn memory"]
     E --> F["session summary / topics / questions / decisions / actions"]
-    F --> G["下一步：人物—话题—观点—意图图"]
+    F --> G["人物—话题—观点—意图实时图"]
     E -. "contribution_ids + SHA-256" .-> A
 ```
 
@@ -99,12 +99,18 @@ flowchart LR
 
 结果：[真实会议记忆](results/cctv-industry-qwen-overlap-15s-v2/session_memory.json)、[中断场景记忆](results/dialogue-interruption-request-memory-groq.json)
 
-## 下一步
+## 可视化图（已实现）
 
 从 `session_memory.json` 直接投影首版可视化图：
 
-- 节点：Speaker、Turn、Topic、Intent、Decision、Action；
-- 边：SPOKE、ABOUT、INTENDS、SUPPORTS、OPPOSES、DECIDED、ASSIGNED_TO；
-- 每条边保留 `turn_id`，点击后可回溯到原始贡献和音频时间范围。
+- 节点：人物、话题、观点和意图；
+- 边：`EXPRESSES`、`ABOUT`、`INTENDS`；
+- 每条边保留 `turn_id`，点击观点可回溯人物、时间、立场和原始贡献 ID；
+- `working_memory` 单独显示，不会在个人话轮完成前固化为观点；
+- 页面每秒检查文件版本，记忆文件原子替换后自动重绘。
+
+```bash
+./lab visualize-memory results/某次运行/session_memory.json
+```
 
 首版使用 JSON 图和浏览器可视化即可，不引入图数据库。会话内只有几十到几百个节点，图数据库目前没有必要。
