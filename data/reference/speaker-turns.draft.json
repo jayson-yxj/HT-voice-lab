@@ -1,0 +1,94 @@
+{
+  "status": "draft_user_reported_turn_ranges",
+  "source": "User supplied speaker order and approximate whole-second intervals in this conversation.",
+  "time_origin": "original video start; seconds",
+  "speaker_scope": "per recording; the same letter across videos does not establish the same person",
+  "interval_semantics": "approximate turn ranges, not continuous speech-activity labels; preserve supplied endpoints",
+  "unlisted_intervals": "unknown; do not assume silence, fill gaps, or invent speaker labels",
+  "internal_pauses_and_overlap": "not annotated",
+  "semantic_turn_completion": "not annotated; speaker changes and clip EOF do not establish completion",
+  "suitable_for_formal_der": false,
+  "recordings": [
+    {
+      "id": "robot-life",
+      "source_video": "data/raw/cctv-robot-life.mp4",
+      "expected_speakers": 5,
+      "user_description": "前8s是第一人、9～21是第二个、22～1:13是第三个、1:14～1:47是第四个、1:47～1:51是第一个、1:51～2:50是第五个",
+      "turns": [
+        {
+          "start_s": 0,
+          "end_s": 8,
+          "speaker": "A"
+        },
+        {
+          "start_s": 9,
+          "end_s": 21,
+          "speaker": "B"
+        },
+        {
+          "start_s": 22,
+          "end_s": 73,
+          "speaker": "C"
+        },
+        {
+          "start_s": 74,
+          "end_s": 107,
+          "speaker": "D"
+        },
+        {
+          "start_s": 107,
+          "end_s": 111,
+          "speaker": "A"
+        },
+        {
+          "start_s": 111,
+          "end_s": 170,
+          "speaker": "E"
+        }
+      ]
+    },
+    {
+      "id": "robot-industry",
+      "source_video": "data/raw/cctv-robot-industry.mp4",
+      "expected_speakers": 6,
+      "user_description": "前19s是第一人、19～30是第二个、31～52是第三个、53～1:39是第四个、1:40～1:42是第一个、1:43～2:41是第五个、2:42～3:19是第6个",
+      "turns": [
+        {
+          "start_s": 0,
+          "end_s": 19,
+          "speaker": "A"
+        },
+        {
+          "start_s": 19,
+          "end_s": 30,
+          "speaker": "B"
+        },
+        {
+          "start_s": 31,
+          "end_s": 52,
+          "speaker": "C"
+        },
+        {
+          "start_s": 53,
+          "end_s": 99,
+          "speaker": "D"
+        },
+        {
+          "start_s": 100,
+          "end_s": 102,
+          "speaker": "A"
+        },
+        {
+          "start_s": 103,
+          "end_s": 161,
+          "speaker": "E"
+        },
+        {
+          "start_s": 162,
+          "end_s": 199,
+          "speaker": "F"
+        }
+      ]
+    }
+  ]
+}

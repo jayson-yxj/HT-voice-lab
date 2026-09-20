@@ -1,0 +1,156 @@
+[
+  {
+    "id": "cn-complete-opinion",
+    "language": "zh",
+    "context": ["我认为先做小范围测试最稳妥"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-complete-question",
+    "language": "zh",
+    "context": ["这个方案会不会影响下周的发布时间"],
+    "expected": ["complete"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "cn-incomplete-condition",
+    "language": "zh",
+    "context": ["如果下周测试结果没有问题"],
+    "expected": ["incomplete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-incomplete-because",
+    "language": "zh",
+    "context": ["因为当前显存还不够所以"],
+    "expected": ["incomplete"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "cn-incomplete-enumeration",
+    "language": "zh",
+    "context": ["我主要有三个问题第一个是成本第二个是进度"],
+    "expected": ["incomplete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-complete-enumeration",
+    "language": "zh",
+    "context": ["我有两个担心一个是成本另一个是上线时间"],
+    "expected": ["complete"],
+    "close_reason": "hard_limit"
+  },
+  {
+    "id": "cn-uncertain-ack",
+    "language": "zh",
+    "context": ["嗯"],
+    "expected": ["uncertain"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-uncertain-deictic",
+    "language": "zh",
+    "context": ["这个嘛"],
+    "expected": ["uncertain", "incomplete"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "cn-no-punctuation-complete",
+    "language": "zh",
+    "context": ["项目下周三启动预算保持不变负责人还是张工"],
+    "expected": ["complete"],
+    "close_reason": "asr_window_rollover"
+  },
+  {
+    "id": "cn-no-punctuation-incomplete",
+    "language": "zh",
+    "context": ["接下来我们需要讨论的是"],
+    "expected": ["incomplete"],
+    "close_reason": "eof"
+  },
+  {
+    "id": "en-complete-opinion",
+    "language": "en",
+    "context": ["I think we should run a small pilot before the full release"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "en-incomplete-reason",
+    "language": "en",
+    "context": ["The main reason I disagree is that"],
+    "expected": ["incomplete"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "en-complete-question",
+    "language": "en",
+    "context": ["Could this change delay the launch next week"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "en-uncertain-short",
+    "language": "en",
+    "context": ["Maybe"],
+    "expected": ["uncertain"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "cn-resumed-complete",
+    "language": "zh",
+    "context": ["我主要有两个担心第一个是成本", "第二个是上线时间"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-resumed-incomplete",
+    "language": "zh",
+    "context": ["这个方案有两个优势第一个是响应速度快", "第二个"],
+    "expected": ["incomplete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-resumed-after-filler",
+    "language": "zh",
+    "context": ["我想一下", "还是先保留现有方案比较稳妥"],
+    "expected": ["complete"],
+    "close_reason": "silence"
+  },
+  {
+    "id": "mixed-complete-opinion",
+    "language": "mixed",
+    "context": ["这个版本的 latency 已经可以接受 we can ship it tomorrow"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-asr-fragment",
+    "language": "zh",
+    "context": ["然后这个模型它"],
+    "expected": ["incomplete"],
+    "close_reason": "hard_limit"
+  },
+  {
+    "id": "cn-explicit-request",
+    "language": "zh",
+    "context": ["小派你觉得这个方案怎么样"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-name-not-request",
+    "language": "zh",
+    "context": ["小派参与了昨天的测试"],
+    "expected": ["complete"],
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "cn-incomplete-conclusion",
+    "language": "zh",
+    "context": ["我的结论是"],
+    "expected": ["incomplete"],
+    "close_reason": "eof"
+  }
+]

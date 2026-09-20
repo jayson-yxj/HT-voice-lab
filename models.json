@@ -1,0 +1,69 @@
+{
+  "paraformer": {
+    "repo": "funasr/paraformer-zh-streaming",
+    "revision": "fd2af606b37d7fb8b3b8a218c5be5b07b53ef6ba",
+    "files": [
+      "config.yaml",
+      "configuration.json",
+      "am.mvn",
+      "tokens.json",
+      "seg_dict",
+      "model.pt",
+      "example/asr_example.wav",
+      "LICENSE"
+    ]
+  },
+  "sortformer": {
+    "repo": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "revision": "fafaab5faa1617a0ca52d38dd3dc4bd636800d3d",
+    "files": [
+      "diar_streaming_sortformer_4spk-v2.1.nemo",
+      "README.md"
+    ]
+  },
+  "segmentation": {
+    "repo": "pyannote/segmentation",
+    "revision": "660b9e20307a2b0cdb400d0f80aadc04a701fc54",
+    "files": [
+      "pytorch_model.bin",
+      "config.yaml",
+      "LICENSE"
+    ]
+  },
+  "embedding": {
+    "repo": "pyannote/embedding",
+    "revision": "4db4899737a38b2d618bbd74350915aa10293cb2",
+    "files": [
+      "pytorch_model.bin",
+      "config.yaml",
+      "LICENSE"
+    ]
+  },
+  "qwen3-asr-0.6b": {
+    "repo": "Qwen/Qwen3-ASR-0.6B",
+    "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "files": [
+      "README.md",
+      "chat_template.json",
+      "config.json",
+      "generation_config.json",
+      "merges.txt",
+      "model.safetensors",
+      "preprocessor_config.json",
+      "tokenizer_config.json",
+      "vocab.json"
+    ]
+  },
+  "sensevoice-small": {
+    "repo": "FunAudioLLM/SenseVoiceSmall",
+    "revision": "3847d57b6bdf2dd8875cb1508d2af43d80a16bf7",
+    "files": [
+      "README.md",
+      "am.mvn",
+      "chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "config.yaml",
+      "configuration.json",
+      "model.pt"
+    ]
+  }
+}

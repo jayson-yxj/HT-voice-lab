@@ -1,0 +1,13 @@
+.python/
+.venv/
+.venv-qwen/
+.vscode/
+.tools/
+models/
+logs/
+results/
+data/raw/*
+data/prepared/*
+__pycache__/
+*.pyc
+.env

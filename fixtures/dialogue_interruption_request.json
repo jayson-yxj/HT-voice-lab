@@ -1,0 +1,58 @@
+[
+  {
+    "id": "span-1",
+    "speaker": "A",
+    "start_s": 0.0,
+    "end_s": 2.0,
+    "text": "我觉得这个方案的主要问题是",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-2",
+    "speaker": "B",
+    "start_s": 2.0,
+    "end_s": 4.0,
+    "text": "我先说一句我支持这个方案",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-3",
+    "speaker": "A",
+    "start_s": 4.0,
+    "end_s": 6.0,
+    "text": "成本太高",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-4",
+    "speaker": "C",
+    "start_s": 6.0,
+    "end_s": 8.0,
+    "text": "小派参与了昨天的测试",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-5",
+    "speaker": "D",
+    "start_s": 8.0,
+    "end_s": 10.0,
+    "text": "小派你觉得这个方案",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-6",
+    "speaker": "B",
+    "start_s": 10.0,
+    "end_s": 11.0,
+    "text": "稍等一下",
+    "close_reason": "speaker_change"
+  },
+  {
+    "id": "span-7",
+    "speaker": "D",
+    "start_s": 11.0,
+    "end_s": 13.0,
+    "text": "应该怎么改",
+    "close_reason": "silence_gap"
+  }
+]
