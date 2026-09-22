@@ -113,4 +113,13 @@ flowchart LR
 ./lab visualize-memory results/某次运行/session_memory.json
 ```
 
+端到端文件音频演示已合并为单一入口：
+
+```bash
+./lab demo data/prepared/cctv-robot-industry-30e19903a3e0.wav \
+  --groq-proxy http://127.0.0.1:7890
+```
+
+融合模块会在每个稳定声学片段收尾时原子更新 `speech_spans.json`；常驻语义状态机只消费尚未处理的稳定片段，随后重建 `dialogue_state.json` 与 `session_memory.json`。限制 Qwen 显存的人工 ASR 窗口不会触发语义完成或观点写入。
+
 首版使用 JSON 图和浏览器可视化即可，不引入图数据库。会话内只有几十到几百个节点，图数据库目前没有必要。

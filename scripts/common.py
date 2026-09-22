@@ -13,7 +13,10 @@ SR = 16000
 
 
 def write_json(path, data):
-    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    target = Path(path)
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(target)
 
 
 def wav_info(path):

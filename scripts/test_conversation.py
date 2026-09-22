@@ -2,7 +2,8 @@
 import numpy as np
 
 from run_asr import SegmentASR, text_delta
-from run_conversation import AttributionRouter, join_window_text, merge_asr_windows
+from run_conversation import (AttributionRouter, SpeakerStabilizer,
+                              join_window_text, merge_asr_windows)
 from qwen_client import QwenSegmentASR, remove_overlap_prefix
 
 
@@ -38,10 +39,15 @@ def check_conversation():
         def prime(self, audio, previous_text):
             self.primed = (audio.copy(), previous_text)
 
-    router = AttributionRouter(CaptureASR, lambda record, cost: events.append(record), silence_samples=7680)
+    completions = []
+    router = AttributionRouter(CaptureASR, lambda record, cost: events.append(record),
+                               silence_samples=7680,
+                               on_complete=lambda records: completions.append(len(records)))
 
-    def feed(start, end, speakers, value):
-        router.push(dict(start_sample=start, end_sample=end, speakers=speakers),
+    def feed(start, end, speakers, value, **metadata):
+        frame = dict(start_sample=start, end_sample=end, speakers=speakers)
+        frame.update(metadata)
+        router.push(frame,
                     np.full(end - start, value, dtype=np.float32))
 
     feed(0, 3200, [0], 1)
@@ -54,6 +60,7 @@ def check_conversation():
     assert [r["speaker"] for r in router.completed] == ["A", "B", "A"]
     assert [(r["start_sample"], r["end_sample"]) for r in router.completed] == [(0, 8000), (8000, 12800), (20480, 22400)]
     assert [r["close_reason"] for r in router.completed] == ["speaker_change", "silence_gap", "eof"]
+    assert completions == [1, 2, 3]
     assert all(r["turn_complete"] is None for r in events)
     assert all(r["text"].endswith("尾字") for r in router.completed)
     np.testing.assert_array_equal(np.concatenate(created[0].audio), np.r_[np.ones(3200), np.zeros(1600), np.ones(3200)])
@@ -90,6 +97,109 @@ def check_conversation():
         raise AssertionError("Accepted audio after EOF")
     except ValueError:
         pass
+
+    # Provisional slots need enough clean speech to create a person. A reused raw
+    # slot can match an existing voice, while a short fragment remains auditable.
+    def fake_embedding(audio):
+        index = int(round(float(np.mean(audio)))) - 1
+        result = np.zeros(3, dtype=np.float32)
+        result[index] = 1
+        return result
+
+    stabilizer = SpeakerStabilizer(
+        fake_embedding, confirm_samples=4, max_hold_samples=8,
+        prototype_samples=8, match_threshold=0.3, match_margin=0.15,
+        appearance_gap_samples=0)
+    stabilized = []
+
+    def stabilize(start, end, speakers, value):
+        stabilized.extend(stabilizer.push(
+            dict(start_sample=start, end_sample=end, speakers=speakers),
+            np.full(end - start, value, dtype=np.float32)))
+
+    stabilize(0, 4, [0], 1)       # Confirm A.
+    stabilize(4, 5, [], 0)
+    stabilize(5, 9, [1], 2)       # Confirm B.
+    stabilize(9, 10, [], 0)
+    stabilize(10, 14, [2], 2)     # Raw C is actually B.
+    stabilize(14, 15, [], 0)
+    stabilize(15, 17, [2], 1)     # Too short to assign safely.
+    stabilize(17, 18, [], 0)
+    stabilize(18, 22, [3], 3)     # Confirm a real third person.
+    stabilized.extend(stabilizer.finish())
+    frames = [frame for frame, _ in stabilized if frame["raw_speakers"]]
+    assert [frame["speakers"] for frame in frames] == [[0], [1], [1], [], [2]]
+    assert frames[2]["stabilization_reasons"][2] == "voiceprint_match"
+    assert frames[3]["attribution"] == "short_unresolved"
+    assert stabilizer.stats()["confirmed_speakers"] == 3
+    assert stabilizer.stats()["unresolved_appearances"] == 1
+
+    # Borderline voiceprints only merge short Sortformer fragments. A raw slot
+    # that persists to the hold limit becomes a new person unless the match is
+    # strong; this prevents two similar real speakers from collapsing together.
+    def borderline_embedding(audio):
+        if np.mean(audio) < 1.5:
+            return np.array([1.0, 0.0], dtype=np.float32)
+        return np.array([0.32, np.sqrt(1 - 0.32 ** 2)], dtype=np.float32)
+
+    borderline = SpeakerStabilizer(
+        borderline_embedding, confirm_samples=2, recheck_samples=1,
+        max_hold_samples=4, prototype_samples=8, appearance_gap_samples=0)
+    borderline.push(dict(start_sample=0, end_sample=2, speakers=[0]),
+                    np.ones(2, dtype=np.float32))
+    borderline.push(dict(start_sample=2, end_sample=3, speakers=[]),
+                    np.zeros(1, dtype=np.float32))
+    borderline.push(dict(start_sample=3, end_sample=6, speakers=[1]),
+                    np.full(3, 2, dtype=np.float32))
+    borderline.push(dict(start_sample=6, end_sample=7, speakers=[]),
+                    np.zeros(1, dtype=np.float32))
+    assert borderline.audit[-1]["decision"] == "voiceprint_match"
+    borderline.push(dict(start_sample=7, end_sample=9, speakers=[2]),
+                    np.full(2, 2, dtype=np.float32))
+    persistent = borderline.push(dict(start_sample=9, end_sample=11, speakers=[2]),
+                                 np.full(2, 2, dtype=np.float32))
+    assert [frame["speakers"] for frame, _ in persistent
+            if frame["raw_speakers"]] == [[1], [1]]
+    borderline.finish()
+    assert borderline.audit[-1]["decision"] == "confirmed_new_speaker"
+    assert borderline.stats()["confirmed_speakers"] == 2
+
+    # A provisional slot that misses at 1.5s must be rechecked before it is
+    # allowed to create a new identity.
+    def improving_embedding(audio):
+        if np.mean(audio) < 1.5 or len(audio) >= 8:
+            return np.array([1, 0], dtype=np.float32)
+        return np.array([0, 1], dtype=np.float32)
+
+    retrying = SpeakerStabilizer(
+        improving_embedding, confirm_samples=4, recheck_samples=4,
+        max_hold_samples=8, prototype_samples=8, appearance_gap_samples=2)
+    retrying.push(dict(start_sample=0, end_sample=4, speakers=[0]),
+                  np.ones(4, dtype=np.float32))
+    retrying.push(dict(start_sample=4, end_sample=5, speakers=[]),
+                  np.zeros(1, dtype=np.float32))
+    assert retrying.push(dict(start_sample=5, end_sample=7, speakers=[1]),
+                         np.full(2, 2, dtype=np.float32)) == []
+    assert retrying.push(dict(start_sample=7, end_sample=8, speakers=[]),
+                         np.zeros(1, dtype=np.float32)) == []
+    assert retrying.push(dict(start_sample=8, end_sample=10, speakers=[1]),
+                         np.full(2, 2, dtype=np.float32)) == []
+    retried = retrying.push(dict(start_sample=10, end_sample=14, speakers=[1]),
+                            np.full(4, 2, dtype=np.float32))
+    assert [frame["speakers"] for frame, _ in retried] == [[0], [], [0], [0]]
+    retrying.finish()
+    assert retrying.stats()["confirmed_speakers"] == 1
+    assert retrying.audit[-1]["decision"] == "voiceprint_match"
+
+    router = AttributionRouter(CaptureASR, lambda record, cost: None)
+    feed(0, 1600, [], 3, attribution="short_unresolved",
+         speaker_candidates=["A", "B", "未确认"], raw_speakers=[2],
+         stabilization_reasons={2: "short_unresolved"})
+    router.finish()
+    unresolved = router.completed[0]
+    assert unresolved["speaker"] is None
+    assert unresolved["attribution"] == "short_unresolved"
+    assert unresolved["raw_speaker_slots"] == [2]
 
     # Bound acoustic ASR state without claiming that the speaker's semantic turn ended.
     limited_events = []

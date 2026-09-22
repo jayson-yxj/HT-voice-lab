@@ -6,10 +6,10 @@
 
 2026-09-16，用户根据首轮测试选定 **Streaming Sortformer v2.1**。每次会话支持 **1～4 个不同的说话人（含 4 人）**，上限按整场会话累计身份计，使用会话内编号。
 
-- 说话人区分：Sortformer；转写保留 Paraformer Streaming 中文基线，Qwen3-ASR-0.6B 为当前中英文候选，SenseVoiceSmall 为轻量备选。
+- 说话人区分：Sortformer；融合入口再用 CPU pyannote 声纹稳定会话身份。转写保留 Paraformer Streaming 中文基线，Qwen3-ASR-0.6B 为当前中英文候选，SenseVoiceSmall 为轻量备选。
 - 日常测试使用生活篇前 1:13（3 人）和产业篇前 1:42（4 人，含 A 再次发言）。清单 `data/samples.json` 的 `in_scope` 标记当前范围。
 - `./lab run 音频.wav` 默认运行 Sortformer；`./lab compare 音频.wav` 顺序运行 Sortformer 和 ASR。diart 代码、权重及首轮数据作为历史实验保留；5～6 人素材归档，当前开发不包含 diart 调参或超 4 人测试。
-- 融合入口为 `./lab run 音频.wav --backend conversation`：按同一音频时钟运行 Sortformer，再将已确定归属的原始 PCM 分段送入 Paraformer，增量输出“谁在什么时候说了什么”。独立实验入口继续用于回归比较。
+- 融合入口为 `./lab run 音频.wav --backend conversation`：按同一音频时钟运行 Sortformer，经会话内声纹稳定后，将已确定归属的原始 PCM 分段送入 ASR，增量输出“谁在什么时候说了什么”。独立实验入口继续用于回归比较。
 - 后续在独立项目内接入每个人的话轮状态、显式点名回复、语音合成、会话记忆和观点／意图图。话轮完成按具体说话人判断；ASR 片段结束、其他人发言或全场静音都不能单独当作“这个人讲完了”。
 
 ## 当前状态
@@ -22,6 +22,7 @@
 - Sortformer + ASR 融合已完成两段 1 倍速验证：输出 A～D、原始音频范围和增量文字，产业篇 A 返回时保持编号。结果与限制见 [融合验证报告](FUSION_20260916.md)。
 - Qwen 已加入 12/15 秒有界声学窗口和 1.5 秒预卷去重；中英长样本整卡峰值从 7619 MiB 降至 4464 MiB，首次出字约 2.15 秒。SenseVoiceSmall 的独立 15 秒窗口筛选峰值约 1719 MiB，但当前中英文准确度不如 Qwen 稳定。详见 [显存与轻量模型复核](ASR_MEMORY_20260917.md)。
 - 已新增独立的每说话人语义状态与回复门控：其他人讲话、静音和声学窗口都不会自动结束某人的话轮；只有完整的显式点名请求才允许回复。普通语义结束仍等待接入模型。详见 [语义话轮与回复门控](SEMANTIC_TURN_20260918.md)。
+- 已加入临时槽位稳定层：1.5 秒开始比对声纹、每 0.5 秒复核、持续 4 秒的新槽位才创建新人；不足时长的孤立槽位保留转写和审计，但不创建人物。短暂槽位允许以 0.30 阈值合并，持续槽位须达到 0.45 才能合并，避免把音色相近的真实新人错误折叠。两条双人和一条四人长样本分别稳定为 2 / 2 / 4 人，详见 [英文长会话测试](ENGLISH_LONG_SESSION_20260920.md)。
 
 详细检查结果见 [ENVIRONMENT_STATUS.md](ENVIRONMENT_STATUS.md)。
 
@@ -84,9 +85,9 @@ cd /home/sunteng/Desktop/HighTorque_vision/HT-voice-lab
 ./lab compare data/prepared/cctv-robot-industry-30e19903a3e0.wav
 ```
 
-## 历史 diart 实验的 pyannote 授权（本机已完成）
+## pyannote 授权（本机已完成）
 
-此授权仅用于复现 diart 实验；当前选定的 Sortformer / ASR 路线不依赖这两个 pyannote 权重。
+`pyannote/embedding` 用于融合入口的 CPU 声纹稳定；`pyannote/segmentation` 仅用于复现历史 diart 实验。
 
 1. 在浏览器登录 Hugging Face，分别接受 [segmentation](https://huggingface.co/pyannote/segmentation) 和 [embedding](https://huggingface.co/pyannote/embedding) 页面上的访问条款。
 2. 在 Hugging Face 创建可读取这两个仓库的 Token，然后在**本机终端**执行：
@@ -160,6 +161,35 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 
 已提供 GroqCloud 严格 JSON 语义判定适配器，默认使用 `qwen/qwen3.8-27b`。先运行 `./lab login-groq` 在用户配置目录安全保存 Key，再增加 `--semantic-provider groq`；当前网络还需传入 `--semantic-proxy http://127.0.0.1:7890`。Key 不写入项目、日志或结果。真实中英样本 6 次判断全部返回，定向开发集为 22/22；这只是小规模冒烟测试。未选择云模型时仍使用安全的 `pending-model` 行为。具体选择依据、命令、延迟和数据策略见 [语义话轮报告](SEMANTIC_TURN_20260918.md)。
 
+### 一条命令实时演示
+
+下面的命令从文件音频开始，以真实时间运行辨人和转写；每个稳定个人片段完成后，依次更新语义状态、当前会话记忆和浏览器关系图：
+
+```bash
+./lab demo data/prepared/cctv-robot-industry-30e19903a3e0.wav \
+  --groq-proxy http://127.0.0.1:7890
+```
+
+默认使用 Qwen3-ASR、Groq 语义判断与记忆压缩，并打开 `http://127.0.0.1:8765`。输出保存到新的 `results/*-demo/` 目录；图在音频处理期间持续读取同一份 `session_memory.json`。按 `Ctrl+C` 停止演示服务。已有服务占用端口时可传 `--port 8766`，固定结果目录可传 `--output`。
+
+`demo` 会在加载音频模型前检查 Groq 密钥及模型权限，避免整段音频完成后才发现语义图为空。也可以单独检查：
+
+```bash
+./lab check-groq
+```
+
+只有 `speaker_change`、`silence_gap`、`overlap_boundary` 或 `eof` 等稳定片段才进入语义链路。Qwen 为限制显存产生的 `asr_window_pause` / `asr_window_limit` 人工窗口只更新转写快照，不会被误当成某个人讲完。未完成话轮保留在 `working_memory`，其他人开始发言不会替它完成。
+
+图中的“话题”采用会话级粒度，表示多人共同讨论的问题或议程；每位人物提出的场景、供应链、成本等答案内容属于各自观点，不会再拆成独立话题。音频结束后仍需等待最后一次 `[live] 正在压缩会话记忆…` 完成；看到 `Demo complete` 后再按 `Ctrl+C`，否则最后一个话轮可能尚未写入图。
+
+快速检查整条链路可使用较短音频、Paraformer 和非实时回放：
+
+```bash
+./lab demo data/prepared/asr_example-8ab66f147266.wav \
+  --asr-model paraformer --fast \
+  --groq-proxy http://127.0.0.1:7890
+```
+
 ### 当前会话记忆
 
 `build-memory` 只压缩已经由语义模型确认完成的个人话轮；被打断且尚未讲完的内容保留在逐说话人的 `working_memory`：
@@ -171,6 +201,8 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 ```
 
 输出 `session_memory.json`，包含逐人话轮摘要、言语行为、意图、立场、话题、实体，以及场景摘要、未解决问题、决定和行动项。压缩记录只保存原始贡献 ID 和文本 SHA-256，完整原文继续保存在 `dialogue_state.json`，可按人物和音频时间回溯。`--memory-provider local` 是不调用网络的结构保底，不提供真正的语义压缩。
+
+长会话会按每 4 个完整话轮分批压缩，再合并整场摘要并统一话题名称，以适配免费 API 的单次输出限制。Groq 返回 429 时会按服务端等待时间自动重试；未分离的重叠片段保留在工作记忆中，不计作人物节点。
 
 把记忆实时投影为“人物—话题—观点—意图”关系图：
 
@@ -184,26 +216,30 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 
 ### 共用的音频路由规则
 
-默认以 1 倍速、20ms 小块回放，保持同一音频时间轴。两个模型同时驻留在 GPU，每次推理依次执行。当前采用 **Sortformer 确定音频归属 → 对应 PCM 进入流式 ASR** 的流程：Paraformer Streaming 没有字级时间戳，按音频归属后再转写，可以避免把滞后输出的文字按输出时刻误归给下一人。代价是文字输出需要先等待辨人缓冲，再等待 ASR 出字。
+默认以 1 倍速、20ms 小块回放，保持同一音频时间轴。当前采用 **Sortformer 临时槽位 → CPU 声纹稳定 A/B/C/D → 对应 PCM 进入流式 ASR** 的流程：ASR 没有字级时间戳，按音频归属后再转写，可以避免把滞后输出的文字按输出时刻误归给下一人。代价是首次出现的人最多需要等待 4 秒声纹确认，之后同一槽位可直接复用身份。
 
-- 单人区间使用 A / B / C / D，会话内编号始终对应 Sortformer 的 speaker0～speaker3。
+- 单人区间使用 A / B / C / D。原始 Sortformer 槽位可通过声纹匹配到已有身份，因此不再假定 raw speaker0～speaker3 永远等同于 A～D。
+- 新槽位累计 1.5 秒干净单人语音后开始声纹匹配，每 0.5 秒复核；持续发言最多等待 4 秒再创建新人。同一临时槽位允许跨越 0.8 秒以内的静音继续累计。低置信度声纹匹配只用于不足 4 秒的槽位碎片，持续槽位需要更高阈值才能复用旧身份。
+- 不足确认时长的孤立槽位使用 `speaker=null`、`attribution=short_unresolved`，保留候选人与原始槽位供审计，但不会投影为新人物。可用 `--no-speaker-stabilization` 复现原始槽位路由。
 - 每个连续音频片段使用独立 ASR 缓存。换人时先排出前一段剩余文字，再开始下一段；模型权重共用。
 - 同一说话人的短停顿保留原始 PCM；默认连续 0.8 秒无活跃说话人时收尾当前转写片段，可用 `--silence-gap 秒数` 调整。较长停顿后的发言会生成新片段，同一人的编号保持一致。
 - 模型判定多个说话人同时活跃时，混合音频只转写一次，`speaker=null`、`attribution=overlap_unresolved`，保留 `speaker_candidates`。当前没有声源分离。
 - 音频时间使用整数采样位置，`start_s/end_s` 是对应音频片段的范围，包含保留的短停顿，**不是每个字的时间戳**。
 - `status=partial` 是累计文字快照；相同 `id` 的 `revision` 递增。`status=final` 只表示该音频片段的 ASR 已收尾；所有记录的 `turn_complete=null`，换人、停顿和文件结束均不声称某人已在语义上讲完。
-- Sortformer 的漏检、错分会影响后续转写归属。当前没有把未检测为语音的长区间另行转写，也没有回溯修正说话人或字级对齐。
+- Sortformer 的漏检、错分仍会影响后续转写归属。稳定层只回溯尚未发布的临时槽位，不能修复已经信任的 A～D 槽位漂移，也不提供声源分离或字级对齐。
 
 ### 融合输出
 
 | 文件 / 字段 | 含义 |
 | --- | --- |
-| `events.jsonl` | 实时追加 `diarization` 和 `transcript` 事件；转写事件内的 `utterance` 是带编号和时间范围的快照 |
+| `events.jsonl` | 实时追加 `diarization_raw`、稳定后的 `diarization` 和 `transcript` 事件；转写事件内的 `utterance` 是带编号和时间范围的快照 |
 | `utterances.json` | 全部已收尾的转写片段，包含 `id`、`speaker`、`text`、采样位置、秒数、归属状态及收尾原因 |
 | `transcript.txt` | 按片段排列的可读文本，例如 `[0.88–5.20] A: 欢迎大家来体验…` |
-| `segments.json` / `prediction.rttm` | 原始 Sortformer 辨人结果，保留 speaker0～speaker3 命名，便于与独立实验核对 |
+| `segments.json` / `prediction.rttm` | 稳定后的会话身份区间，使用 speaker0～speaker3 命名 |
+| `raw_segments.json` | 未经身份稳定的 Sortformer 原始槽位区间 |
+| `speaker_stabilization.json` | 每次临时槽位出现的时间、最终身份、判定原因及声纹相似度 |
 | `first_transcript_output_seconds` | 回放开始至首次非空文字输出的时间，包含开头静音与两级模型缓冲 |
-| `max_pending_audio_seconds` | 等待辨人结果的 PCM 缓冲峰值，不包含模型内部缓存 |
+| `max_pending_audio_seconds` | 等待辨人和身份确认的 PCM 缓冲峰值，不包含模型内部缓存 |
 
 `summary.json` 的 `compute_rtf` 汇总两套模型的推理耗时；`output_delay_s` 仍只统计辨人结果发布相对音频时间的延迟，不能当成文字延迟或话轮结束延迟。两种事件共有 `available_audio_s` 和 `emitted_at_s`，可检查音频进度与实际输出时刻。
 
@@ -222,9 +258,10 @@ FunASR 1.4.15 将小于 60ms 的收尾输入当作缓存排出操作；融合入
 | `summary.json` | 加载时间、计算实时率、输出延迟、内存和显存统计 |
 | `segments.json` / `prediction.rttm` | 辨人的时间区间和会话内编号 |
 | `utterances.json` | 原始声学 ASR 窗口；窗口完成不代表语义话轮完成 |
-| `speech_spans.json` | 合并同一说话人的人工 ASR 窗口，保留来源窗口编号和 `turn_complete=null` |
+| `speech_spans.json` | 原子更新的稳定转写快照；合并同一说话人的人工 ASR 窗口，保留来源窗口编号和 `turn_complete=null` |
 | `transcript.txt` | 合并人工窗口后的可读转写 |
 | `dialogue_state.json` | 每个说话人的独立语义状态、打断／续说记录和显式回复请求 |
+| `session_memory.json` | `demo` 持续更新的会话摘要、逐人观点、话题、意图、证据和待完成发言 |
 | `comparison.csv` | `compare` 的汇总结果 |
 
 ### 如何理解速度数字
@@ -274,6 +311,7 @@ CER 为字错误率。使用 NFKC 规范化、统一小写、去掉空白和 Uni
 | 组件 | 固定选择 |
 | --- | --- |
 | 说话人区分（已选定） | `nvidia/diar_streaming_sortformer_4spk-v2.1`；6帧块、7帧右上下文、188帧 FIFO/声纹缓存；80ms一帧 |
+| 会话身份稳定 | CPU `pyannote/embedding`；1.5s 起匹配、0.5s 复核、4s 新人确认上限、短片段/持续片段阈值 0.30/0.45、最多4人 |
 | 转写基线 | `funasr/paraformer-zh-streaming`，600ms 块 |
 | 历史 diart 实验 | `diart 0.9.2` + `pyannote/segmentation` + `pyannote/embedding`；5s 历史窗口、0.5s 步进、默认1s延迟；会话聚类容量8 |
 

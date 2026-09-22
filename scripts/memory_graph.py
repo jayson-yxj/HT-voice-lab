@@ -38,7 +38,7 @@ def project(memory):
     for name in [*_items(memory.get("participants"), "participants"),
                  *(item.get("speaker") for item in turns),
                  *(item.get("speaker") for item in working)]:
-        if isinstance(name, str) and name and name not in speakers:
+        if isinstance(name, str) and name and name != "unresolved" and name not in speakers:
             speakers.append(name)
 
     topic_info = {}
@@ -161,8 +161,10 @@ def load_graph(path):
     return project(json.loads(path.read_text(encoding="utf-8")))
 
 
-def serve(path, host="127.0.0.1", port=8765, open_browser=True):
-    source = Path(path).expanduser().resolve(strict=True)
+def create_server(path, host="127.0.0.1", port=8765, require_file=True):
+    source = Path(path).expanduser().resolve()
+    if require_file and not source.is_file():
+        raise OSError("Session memory is missing: {}".format(source))
     if not PAGE.is_file():
         raise OSError("Graph page is missing: {}".format(PAGE))
     page = PAGE.read_bytes()
@@ -203,6 +205,11 @@ def serve(path, host="127.0.0.1", port=8765, open_browser=True):
 
     server = ThreadingHTTPServer((host, port), Handler)
     url = "http://{}:{}".format(host, server.server_address[1])
+    return server, source, url
+
+
+def serve(path, host="127.0.0.1", port=8765, open_browser=True):
+    server, source, url = create_server(path, host, port)
     print("Watching {}".format(source), flush=True)
     print(url, flush=True)
     if open_browser:

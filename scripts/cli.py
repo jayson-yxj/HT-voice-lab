@@ -86,6 +86,14 @@ def prepare(args):
     return 0
 
 
+def check_groq(args):
+    from groq_semantic import check_model_access
+    models = args.model or ["qwen/qwen3.8-27b"]
+    available = check_model_access(models, args.timeout, proxy=args.proxy)
+    print(json.dumps(dict(status="ok", models=available), ensure_ascii=False, indent=2))
+    return 0
+
+
 def run(args):
     import random
     import numpy as np
@@ -186,6 +194,9 @@ def main():
                            help="Audio pre-roll used to recover words across Qwen window boundaries")
             p.add_argument("--silence-gap", type=float, default=0.8,
                            help="Conversation ASR segment silence gap in seconds; not semantic turn completion")
+            p.add_argument("--no-speaker-stabilization", dest="speaker_stabilization",
+                           action="store_false", default=True,
+                           help="Use raw Sortformer slots without CPU voiceprint stabilization")
         p.set_defaults(func=run if name == "run" else compare)
     p = sub.add_parser("fetch", help="Download revision-pinned model files")
     p.add_argument("--only", nargs="+", choices=list(json.loads((ROOT / "models.json").read_text())))
@@ -194,6 +205,11 @@ def main():
     p.set_defaults(func=lambda a: subprocess.call([str(Path(sys.executable).parent / "hf"), "auth", "login"]))
     p = sub.add_parser("login-groq", help="Securely save a Groq API key in the user config directory")
     p.set_defaults(func=lambda a: importlib.import_module("groq_semantic").login())
+    p = sub.add_parser("check-groq", help="Check Groq key and model permissions before a demo")
+    p.add_argument("--model", action="append")
+    p.add_argument("--timeout", type=float, default=10.0)
+    p.add_argument("--proxy")
+    p.set_defaults(func=check_groq)
     p = sub.add_parser("score", help="Score diarization against manually verified RTTM")
     p.add_argument("--reference", required=True)
     p.add_argument("--hypothesis", required=True)
@@ -235,6 +251,33 @@ def main():
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-open", action="store_true", help="Do not open the graph in a browser")
     p.set_defaults(func=lambda a: importlib.import_module("memory_graph").run(a))
+    p = sub.add_parser("demo", help="Run conversation, semantic memory and the live graph together")
+    p.add_argument("audio")
+    p.add_argument("--output")
+    p.add_argument("--session-id")
+    p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    p.add_argument("--fast", action="store_true", help="Process audio without realtime waiting")
+    p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--asr-model", choices=["paraformer", "qwen3"], default="qwen3")
+    p.add_argument("--qwen-chunk-seconds", type=float, choices=[1.0, 2.0], default=1.0)
+    p.add_argument("--qwen-window-pause", type=float, default=12.0)
+    p.add_argument("--qwen-window-limit", type=float, default=15.0)
+    p.add_argument("--qwen-window-overlap", type=float, default=1.5)
+    p.add_argument("--silence-gap", type=float, default=0.8)
+    p.add_argument("--no-speaker-stabilization", dest="speaker_stabilization",
+                   action="store_false", default=True)
+    p.add_argument("--assistant-alias", action="append")
+    p.add_argument("--invocation-context-seconds", type=float, default=30.0)
+    p.add_argument("--semantic-model", default="qwen/qwen3.8-27b")
+    p.add_argument("--semantic-timeout", type=float, default=10.0)
+    p.add_argument("--semantic-minimum-interval", type=float, default=0.0)
+    p.add_argument("--memory-model", default="qwen/qwen3.8-27b")
+    p.add_argument("--memory-timeout", type=float, default=30.0)
+    p.add_argument("--groq-proxy", help="Optional HTTPS proxy used by both semantic stages")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-open", action="store_true")
+    p.set_defaults(func=lambda a: importlib.import_module("live_demo").run(a))
     args = parser.parse_args()
     try:
         return args.func(args)

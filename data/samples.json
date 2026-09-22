@@ -88,5 +88,53 @@
     "draft_annotation": "data/reference/speaker-turns.draft.json",
     "draft_recording_id": "robot-industry",
     "in_scope": false
+  },
+  {
+    "id": "english-chat-2speakers",
+    "source_url": null,
+    "video": "data/raw/english-chat-2speakers.mp4",
+    "audio": "data/prepared/english-chat-2speakers-c6183afde70b.wav",
+    "clip_start_s": 0,
+    "clip_end_s": 475.4518125,
+    "audio_seconds": 475.4518125,
+    "expected_speakers": 2,
+    "speaker_count_source": "user_supplied_filename",
+    "language": "en",
+    "comparison_group": "english-long-conversation",
+    "reference_annotation": null,
+    "boundary_audit": "Full source; speaker count and boundaries not yet manually verified",
+    "in_scope": true
+  },
+  {
+    "id": "english-chat-2speakers-2",
+    "source_url": null,
+    "video": "data/raw/english-chat-2speakers-2.mp4",
+    "audio": "data/prepared/english-chat-2speakers-2-ed4c01e09a1b.wav",
+    "clip_start_s": 0,
+    "clip_end_s": 628.587375,
+    "audio_seconds": 628.587375,
+    "expected_speakers": 2,
+    "speaker_count_source": "user_supplied_filename",
+    "language": "en",
+    "comparison_group": "english-long-conversation",
+    "reference_annotation": null,
+    "boundary_audit": "Full source; opening narration, short backchannels and overlaps require manual audit",
+    "in_scope": true
+  },
+  {
+    "id": "english-chat-4speakers",
+    "source_url": null,
+    "video": "data/raw/english-chat-4speakers.mp4",
+    "audio": "data/prepared/english-chat-4speakers-1953ef040ed2.wav",
+    "clip_start_s": 0,
+    "clip_end_s": 581.2053125,
+    "audio_seconds": 581.2053125,
+    "expected_speakers": 4,
+    "speaker_count_source": "user_supplied_filename",
+    "language": "en",
+    "comparison_group": "english-long-conversation",
+    "reference_annotation": null,
+    "boundary_audit": "Full source; speaker identities and overlap boundaries not yet manually verified",
+    "in_scope": true
   }
 ]

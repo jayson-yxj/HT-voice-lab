@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 
 from groq_semantic import chat_completion
+from common import write_json
 
 
 SPEECH_ACTS = [
@@ -96,11 +97,21 @@ SESSION_SCHEMA = {
                  "action_items", "turn_memories"],
     "additionalProperties": False,
 }
+SCENE_SCHEMA = json.loads(json.dumps(SESSION_SCHEMA))
+SCENE_SCHEMA["properties"].pop("turn_memories")
+SCENE_SCHEMA["required"].remove("turn_memories")
 
 SYSTEM_PROMPT = """你负责把多人现场对话压缩为可追溯的当前会话记忆。
 只能使用输入中明确出现的信息，不得补全常识或猜测姓名。每个人的观点、意图和立场必须分开保存，不能把主持人的问题当成其观点，也不能把不同人的意见合并成共识。
+话题表示多人正在共同讨论的一个问题或议程，必须使用会话级粒度，不能把单个回答中的论据、条件、关键词或观点类别另建为话题。主持人提出一个问题后，不同人物针对它给出的不同答案必须共享完全相同的 topic name；这些差异只写入各自的 summary、intent、stance 和 entities。只有对话明确转向另一个独立问题或议程时才能新增话题。例如讨论“机器人产业发展的必要条件”时，场景、供应链、资本、成本和人才都是不同观点的内容，不能拆成五个话题。
+话题名称首次确定后保持稳定，后续相关话轮复用原名称，不要因为新增观点而改名或细分。
 只记录明确作出的决定和行动项；尚未解决的问题放入 open_questions。每个结论都用 evidence_turn_ids 指回来源。
 为每个输入 turn_id 返回且只返回一条 turn_memories。每条摘要限一句，intent 使用极短短语，每个话题摘要限一句；避免在多个字段重复同一句话。摘要使用简洁中文，英文专有名词可以保留。"""
+
+SCENE_MERGE_PROMPT = """你负责把按时间分批生成的多人会话记忆合并成一份整场会话摘要。
+只能使用输入信息，不得猜测。合并重复或近义话题，并保持会话级粒度；一个问题下的论据、条件和不同观点不能拆成独立话题。
+保留有效的 evidence_turn_ids，并让话题证据覆盖输入中出现的每个话轮。已经得到回答的问题不要列入 open_questions；只有明确作出的决定和行动项才能记录。
+摘要使用简洁中文，英文专有名词可以保留。"""
 
 
 def _join_text(previous, current):
@@ -109,6 +120,30 @@ def _join_text(previous, current):
     if previous[-1:].isascii() and previous[-1:].isalnum() and current[:1].isascii() and current[:1].isalnum():
         return previous.rstrip() + " " + current.lstrip()
     return previous.rstrip() + current.lstrip()
+
+
+def _align_topic_names(scene, memories):
+    """Use only final scene topics; attach omitted filler turns to the nearest topic."""
+    topics = scene.get("topics", [])
+    positions = {item["turn_id"]: index for index, item in enumerate(memories)}
+    topic_positions = []
+    for topic in topics:
+        evidence = [identifier for identifier in topic.get("evidence_turn_ids", [])
+                    if identifier in positions]
+        topic["evidence_turn_ids"] = evidence
+        topic_positions.append((topic, [positions[identifier] for identifier in evidence]))
+    for memory in memories:
+        identifier = memory["turn_id"]
+        matches = [topic for topic, _ in topic_positions
+                   if identifier in topic["evidence_turn_ids"]]
+        if not matches and topic_positions:
+            matches = [min(topic_positions, key=lambda item: min(
+                (abs(positions[identifier] - position) for position in item[1]),
+                default=len(memories)))[0]]
+            matches[0]["evidence_turn_ids"].append(identifier)
+        memory["topic_names"] = [topic["name"] for topic in matches]
+    for topic, _ in topic_positions:
+        topic["evidence_turn_ids"].sort(key=positions.get)
 
 
 def completed_turns(dialogue):
@@ -174,7 +209,7 @@ class LocalMemoryCompressor:
 
 
 class GroqMemoryCompressor:
-    name = "groq-session-memory-v1"
+    name = "groq-session-memory-v2"
 
     def __init__(self, model="qwen/qwen3.8-27b", timeout=20.0, proxy=None, transport=None):
         if timeout <= 0:
@@ -184,7 +219,11 @@ class GroqMemoryCompressor:
         self.proxy = proxy
         self.transport = transport
 
-    def compress(self, turns):
+    def _post(self, payload):
+        return (self.transport(payload) if self.transport else
+                chat_completion(payload, self.timeout, proxy=self.proxy))
+
+    def _compress_batch(self, turns):
         turn_ids = [item["id"] for item in turns]
         schema = json.loads(json.dumps(SESSION_SCHEMA))
         turn_array = schema["properties"]["turn_memories"]
@@ -208,8 +247,7 @@ class GroqMemoryCompressor:
             },
         }
         started = time.monotonic()
-        response = (self.transport(payload) if self.transport else
-                    chat_completion(payload, self.timeout, proxy=self.proxy))
+        response = self._post(payload)
         elapsed = time.monotonic() - started
         result = json.loads(response["choices"][0]["message"]["content"])
         expected = {item["id"] for item in turns}
@@ -219,6 +257,46 @@ class GroqMemoryCompressor:
                              .format(sorted(expected), actual))
         _validate_evidence(result, expected)
         return result, dict(latency_s=elapsed)
+
+    def _merge_scenes(self, scenes, valid_turn_ids):
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SCENE_MERGE_PROMPT},
+                {"role": "user", "content": json.dumps(
+                    {"partial_scenes": scenes}, ensure_ascii=False)},
+            ],
+            "temperature": 0,
+            "max_completion_tokens": 950,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "session_scene", "strict": True,
+                                "schema": SCENE_SCHEMA},
+            },
+        }
+        started = time.monotonic()
+        response = self._post(payload)
+        result = json.loads(response["choices"][0]["message"]["content"])
+        _validate_evidence(result, valid_turn_ids)
+        return result, time.monotonic() - started
+
+    def compress(self, turns):
+        if len(turns) <= 4:
+            return self._compress_batch(turns)
+        scenes = []
+        memories = []
+        latency = 0.0
+        for offset in range(0, len(turns), 4):
+            result, metrics = self._compress_batch(turns[offset:offset + 4])
+            memories.extend(result.pop("turn_memories"))
+            scenes.append(result)
+            latency += metrics["latency_s"]
+        valid_turn_ids = {item["id"] for item in turns}
+        scene, merge_latency = self._merge_scenes(scenes, valid_turn_ids)
+        latency += merge_latency
+        _align_topic_names(scene, memories)
+        scene["turn_memories"] = memories
+        return scene, dict(latency_s=latency)
 
 
 def _validate_evidence(value, valid_turn_ids):
@@ -304,22 +382,50 @@ def build(dialogue, source, session_id, compressor):
                    text_ratio=round(compressed_chars / raw_chars, 3) if raw_chars else None))
 
 
+def empty(dialogue, source, session_id, compressor):
+    """Create a valid live-memory snapshot before any semantic turn completes."""
+    source_bytes = source.read_bytes()
+    pending = working_memory(dialogue, set())
+    participants = sorted({item["speaker"] for item in pending if item["speaker"] != "unresolved"})
+    return dict(
+        schema_version=1, session_id=session_id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        source=dict(dialogue_state=str(source), sha256=hashlib.sha256(source_bytes).hexdigest()),
+        policy=dict(scope="current_session", completed_turns_only=True,
+                    raw_evidence_external=True, preserve_speaker_boundaries=True),
+        compressor=dict(provider=compressor.name, model=compressor.model, latency_s=0.0),
+        participants=participants, turns=[], working_memory=pending,
+        scene=dict(session_summary="会话正在进行，尚无已完成话轮。", topics=[],
+                   open_questions=[], decisions=[], action_items=[]),
+        stats=dict(source_contributions=len(dialogue.get("contributions", [])),
+                   completed_turns=0, working_speakers=len(pending),
+                   raw_completed_text_chars=0, compressed_text_chars=0,
+                   text_ratio=None))
+
+
+def save(path, value):
+    write_json(path, value)
+
+
 def run(args):
     source = Path(args.dialogue_state).expanduser().resolve(strict=True)
     dialogue = json.loads(source.read_text())
     if not isinstance(dialogue, dict):
         raise ValueError("Dialogue state input must be a JSON object")
-    compressor = (GroqMemoryCompressor(args.memory_model, args.memory_timeout,
-                                       args.memory_proxy)
-                  if args.memory_provider == "groq" else LocalMemoryCompressor())
+    if args.memory_provider == "groq":
+        from groq_semantic import check_model_access
+        check_model_access([args.memory_model], args.memory_timeout,
+                           proxy=args.memory_proxy)
+        compressor = GroqMemoryCompressor(args.memory_model, args.memory_timeout,
+                                          args.memory_proxy)
+    else:
+        compressor = LocalMemoryCompressor()
     session_id = args.session_id or source.parent.name
     if not session_id.strip():
         raise ValueError("Session ID cannot be empty")
     result = build(dialogue, source, session_id, compressor)
     target = Path(args.output) if args.output else source.with_name("session_memory.json")
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(target)
+    save(target, result)
     print(target)
     return 0

@@ -3,11 +3,12 @@ import json
 import getpass
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import time
 from urllib import request
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
 SCHEMA = {
@@ -25,6 +26,18 @@ SYSTEM_PROMPT = """你负责判断多人现场对话中某一个说话人自己�
 只依据这个人的文字内容判断。换人、静音、音频片段结束都不是讲完的证据。
 完整表达了观点、问题或请求时选择 complete；句子未完、列举未完、明确还要继续时选择 incomplete；证据不足时选择 uncertain。
 不要决定助手是否回复；回复权限由本地显式点名门控单独控制。"""
+
+
+def _retry_after_seconds(headers, message, attempt):
+    value = headers.get("Retry-After") if headers else None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        match = re.search(r"try again in ([0-9.]+)(ms|s)", message, re.IGNORECASE)
+        if match:
+            delay = float(match.group(1))
+            return delay / 1000 if match.group(2).lower() == "ms" else delay
+    return min(8.0, 0.5 * 2 ** attempt)
 
 
 def key_path():
@@ -65,29 +78,92 @@ def login():
     return 0
 
 
+def _error_message(exc):
+    try:
+        return json.loads(exc.read().decode(errors="replace"))["error"]["message"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return exc.reason
+
+
+def _permission_hint(code):
+    if code != 403:
+        return ""
+    return ("; check the selected Groq project and pending Model Terms at "
+            "https://console.groq.com/settings/model-terms; if those are correct, "
+            "contact Groq support because this account returned a generic permission denial")
+
+
+def _open_json(opener, call, timeout):
+    """Retry transient proxy/TLS failures without retrying HTTP responses."""
+    for attempt in range(5):
+        try:
+            with opener.open(call, timeout=timeout) as response:
+                return json.load(response)
+        except HTTPError:
+            raise
+        except (URLError, TimeoutError) as exc:
+            if attempt == 4:
+                raise OSError("Groq network request failed after 5 attempts: {}".format(
+                    exc)) from None
+            time.sleep(_retry_after_seconds(None, "", attempt))
+
+
+def available_models(timeout=10.0, api_key=None, proxy=None):
+    """Validate Groq access before starting a long audio run."""
+    key = api_key or load_api_key()
+    if not key:
+        raise ValueError("GROQ_API_KEY is not set; run './lab login-groq'")
+    selected_proxy = proxy or os.environ.get("GROQ_HTTPS_PROXY")
+    opener = (request.build_opener(request.ProxyHandler({"https": selected_proxy}))
+              if selected_proxy else request.build_opener())
+    call = request.Request(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json",
+                 "User-Agent": "HT-Voice-Lab/0.1"})
+    try:
+        payload = _open_json(opener, call, timeout)
+    except HTTPError as exc:
+        message = _error_message(exc)
+        raise OSError("Groq API access check {}: {}{}".format(
+            exc.code, message, _permission_hint(exc.code))) from None
+    return {item.get("id") for item in payload.get("data", []) if item.get("id")}
+
+
+def check_model_access(models, timeout=10.0, api_key=None, proxy=None):
+    available = available_models(timeout, api_key, proxy)
+    missing = sorted(set(models) - available)
+    if missing:
+        raise OSError("Groq models are unavailable to this project: {}. Check "
+                      "https://console.groq.com/settings/limits".format(
+                          ", ".join(missing)))
+    return sorted(set(models))
+
+
 def chat_completion(payload, timeout=10.0, api_key=None, proxy=None):
     """Call Groq Chat Completions without exposing credentials to callers."""
     key = api_key or load_api_key()
     if not key:
         raise ValueError("GROQ_API_KEY is not set; configure it locally and do not paste it into chat")
     body = json.dumps(payload, ensure_ascii=False).encode()
-    call = request.Request(
-        "https://api.groq.com/openai/v1/chat/completions", data=body, method="POST",
-        headers={"Authorization": "Bearer " + key,
-                 "Content-Type": "application/json",
-                 "User-Agent": "HT-Voice-Lab/0.1"})
     selected_proxy = proxy or os.environ.get("GROQ_HTTPS_PROXY")
     opener = (request.build_opener(request.ProxyHandler({"https": selected_proxy}))
               if selected_proxy else request.build_opener())
-    try:
-        with opener.open(call, timeout=timeout) as response:
-            return json.load(response)
-    except HTTPError as exc:
+    for attempt in range(5):
+        call = request.Request(
+            "https://api.groq.com/openai/v1/chat/completions", data=body, method="POST",
+            headers={"Authorization": "Bearer " + key,
+                     "Content-Type": "application/json",
+                     "User-Agent": "HT-Voice-Lab/0.1"})
         try:
-            message = json.loads(exc.read().decode(errors="replace"))["error"]["message"]
-        except (KeyError, TypeError, json.JSONDecodeError):
-            message = exc.reason
-        raise OSError("Groq API {}: {}".format(exc.code, message)) from None
+            return _open_json(opener, call, timeout)
+        except HTTPError as exc:
+            message = _error_message(exc)
+            if exc.code == 429 and attempt < 4:
+                time.sleep(_retry_after_seconds(exc.headers, str(message), attempt))
+                continue
+            raise OSError("Groq API {}: {}{}".format(
+                exc.code, message, _permission_hint(exc.code))) from None
 
 
 class GroqSemanticJudge:

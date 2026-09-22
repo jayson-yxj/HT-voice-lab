@@ -1,6 +1,10 @@
 """Checks independent speaker state and explicit assistant reply gating."""
+from io import StringIO
+from unittest.mock import patch
+from urllib.error import URLError
+
 from dialogue_state import analyze
-from groq_semantic import GroqSemanticJudge
+from groq_semantic import GroqSemanticJudge, _open_json, _retry_after_seconds
 
 
 def span(identifier, speaker, start, end, text, reason="speaker_change"):
@@ -9,6 +13,22 @@ def span(identifier, speaker, start, end, text, reason="speaker_change"):
 
 
 def check_dialogue_state():
+    assert _retry_after_seconds({}, "Please try again in 750ms", 0) == 0.75
+    assert _retry_after_seconds({}, "Please try again in 1.5s", 0) == 1.5
+    class FlakyOpener:
+        calls = 0
+
+        def open(self, call, timeout):
+            self.calls += 1
+            if self.calls < 3:
+                raise URLError(TimeoutError("TLS handshake timed out"))
+            return StringIO('{"status":"ok"}')
+
+    flaky = FlakyOpener()
+    with patch("groq_semantic.time.sleep") as sleep:
+        assert _open_json(flaky, object(), 10) == {"status": "ok"}
+    assert flaky.calls == 3
+    assert [item.args[0] for item in sleep.call_args_list] == [0.5, 1.0]
     result = analyze([
         span("s1", "A", 0, 2, "我先说第一点，这里还没有说完"),
         span("s2", "B", 2, 4, "我补充另一个观点。"),

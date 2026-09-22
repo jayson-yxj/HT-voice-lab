@@ -4,6 +4,8 @@ import math
 from pathlib import Path
 import re
 
+from common import write_json
+
 
 TERMINAL = re.compile(r"[。！？.!?]\s*$")
 QUESTION_END = re.compile(r"(?:呢|吗|么|吧)[。！？.!?]?\s*$")
@@ -231,12 +233,14 @@ def run(args):
         raise ValueError("Semantic timeout must be a positive number of seconds")
     semantic_judge = None
     if args.semantic_provider == "groq":
-        from groq_semantic import GroqSemanticJudge
+        from groq_semantic import GroqSemanticJudge, check_model_access
+        check_model_access([args.semantic_model], args.semantic_timeout,
+                           proxy=args.semantic_proxy)
         semantic_judge = GroqSemanticJudge(
             args.semantic_model, args.semantic_timeout, proxy=args.semantic_proxy,
             minimum_interval=args.semantic_minimum_interval)
     result = analyze(spans, aliases, args.invocation_context_seconds, semantic_judge)
     target = Path(args.output) if args.output else source.with_name("dialogue_state.json")
-    target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    write_json(target, result)
     print(target)
     return 0
