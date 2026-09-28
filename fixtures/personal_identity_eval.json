@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "scope": "current_session",
+    "manual_binding_required": false,
+    "unknown_fields_remain_empty": true,
+    "same_name_does_not_merge": true,
+    "evidence_must_be_exact_quote": true
+  },
+  "cases": [
+    {
+      "id": "explicit-and-unknown-four-speakers",
+      "session_id": "fixture-session-01",
+      "turns": [
+        {
+          "id": "turn-000001",
+          "speaker": "A",
+          "text": "我叫林晓，现在住在杭州，在一家机器人公司做产品经理。"
+        },
+        {
+          "id": "turn-000002",
+          "speaker": "B",
+          "text": "你刚才提到杭州，能说说那边的生活吗？"
+        },
+        {
+          "id": "turn-000003",
+          "speaker": "A",
+          "text": "我平时喜欢徒步，明年想完成一次全程马拉松。"
+        },
+        {
+          "id": "turn-000004",
+          "speaker": "C",
+          "text": "林晓看起来很外向，我猜她其实住在上海。"
+        },
+        {
+          "id": "turn-000005",
+          "speaker": "D",
+          "text": "我和林晓是同事，我负责视觉算法。"
+        }
+      ],
+      "expected": {
+        "participants": [
+          {"speaker": "A", "person_id": null, "display_name": "林晓", "identity_status": "session_identified"},
+          {"speaker": "B", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "C", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "D", "person_id": null, "display_name": null, "identity_status": "anonymous"}
+        ],
+        "observations": [
+          {"subject": "A", "kind": "name", "value": "林晓", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "我叫林晓"}]},
+          {"subject": "A", "kind": "location", "value": "杭州", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "现在住在杭州"}]},
+          {"subject": "A", "kind": "occupation", "value": "产品经理", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "在一家机器人公司做产品经理"}]},
+          {"subject": "A", "kind": "preference", "value": "徒步", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000003", "quote": "我平时喜欢徒步"}]},
+          {"subject": "A", "kind": "goal", "value": "明年完成一次全程马拉松", "epistemic_status": "explicit", "state": "candidate", "durability": "temporary", "evidence": [{"turn_id": "turn-000003", "quote": "明年想完成一次全程马拉松"}]},
+          {"subject": "D", "kind": "relationship", "value": "林晓的同事", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000005", "quote": "我和林晓是同事"}]},
+          {"subject": "D", "kind": "role", "value": "负责视觉算法", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000005", "quote": "我负责视觉算法"}]}
+        ],
+        "forbidden_observations": [
+          {"subject": "A", "kind": "trait", "value": "外向"},
+          {"subject": "A", "kind": "location", "value": "上海"},
+          {"subject": "B", "kind": "location", "value": "杭州"}
+        ]
+      }
+    },
+    {
+      "id": "same-name-stays-separate",
+      "session_id": "fixture-session-02",
+      "turns": [
+        {"id": "turn-000001", "speaker": "A", "text": "我叫陈晨，我在做交互设计。"},
+        {"id": "turn-000002", "speaker": "B", "text": "我也叫陈晨，不过我是后端工程师。"}
+      ],
+      "expected": {
+        "participants": [
+          {"speaker": "A", "person_id": null, "display_name": "陈晨", "identity_status": "session_identified"},
+          {"speaker": "B", "person_id": null, "display_name": "陈晨", "identity_status": "session_identified"}
+        ],
+        "observations": [
+          {"subject": "A", "kind": "name", "value": "陈晨", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "我叫陈晨"}]},
+          {"subject": "A", "kind": "occupation", "value": "交互设计", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "我在做交互设计"}]},
+          {"subject": "B", "kind": "name", "value": "陈晨", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000002", "quote": "我也叫陈晨"}]},
+          {"subject": "B", "kind": "occupation", "value": "后端工程师", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000002", "quote": "我是后端工程师"}]}
+        ],
+        "forbidden_observations": []
+      }
+    },
+    {
+      "id": "quotation-address-and-temporary-location",
+      "session_id": "fixture-session-03",
+      "turns": [
+        {"id": "turn-000001", "speaker": "A", "text": "小王说他住在北京，还喜欢咖啡。"},
+        {"id": "turn-000002", "speaker": "B", "text": "我喜欢喝茶，最近在学习摄影。"},
+        {"id": "turn-000003", "speaker": "C", "text": "李明，你怎么看？"},
+        {"id": "turn-000004", "speaker": "D", "text": "我今天在上海出差，周末就回深圳。"}
+      ],
+      "expected": {
+        "participants": [
+          {"speaker": "A", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "B", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "C", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "D", "person_id": null, "display_name": null, "identity_status": "anonymous"}
+        ],
+        "observations": [
+          {"subject": "B", "kind": "preference", "value": "茶", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000002", "quote": "我喜欢喝茶"}]},
+          {"subject": "B", "kind": "experience", "value": "正在学习摄影", "epistemic_status": "explicit", "state": "candidate", "durability": "temporary", "evidence": [{"turn_id": "turn-000002", "quote": "最近在学习摄影"}]},
+          {"subject": "D", "kind": "location", "value": "上海", "epistemic_status": "explicit", "state": "candidate", "durability": "temporary", "evidence": [{"turn_id": "turn-000004", "quote": "我今天在上海出差"}]}
+        ],
+        "forbidden_observations": [
+          {"subject": "A", "kind": "location", "value": "北京"},
+          {"subject": "A", "kind": "preference", "value": "咖啡"},
+          {"subject": "C", "kind": "name", "value": "李明"},
+          {"subject": "D", "kind": "location", "value": "深圳"}
+        ]
+      }
+    },
+    {
+      "id": "explicit-correction-preserves-history",
+      "session_id": "fixture-session-04",
+      "turns": [
+        {"id": "turn-000001", "speaker": "A", "text": "我住在上海。"},
+        {"id": "turn-000002", "speaker": "A", "text": "刚才说的是以前，我上个月已经搬到杭州了。"},
+        {"id": "turn-000003", "speaker": "B", "text": "我没有提过自己的住址。"}
+      ],
+      "expected": {
+        "participants": [
+          {"speaker": "A", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "B", "person_id": null, "display_name": null, "identity_status": "anonymous"}
+        ],
+        "observations": [
+          {"subject": "A", "kind": "location", "value": "上海", "epistemic_status": "explicit", "state": "superseded", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "我住在上海"}]},
+          {"subject": "A", "kind": "location", "value": "杭州", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000002", "quote": "我上个月已经搬到杭州了"}]}
+        ],
+        "forbidden_observations": [
+          {"subject": "B", "kind": "location", "value": "自己的住址"}
+        ]
+      }
+    },
+    {
+      "id": "explicit-trait-and-inferred-style",
+      "session_id": "fixture-session-05",
+      "turns": [
+        {"id": "turn-000001", "speaker": "A", "text": "每次定方案前，我都会先列出风险。"},
+        {"id": "turn-000002", "speaker": "A", "text": "这次也先把风险和失败条件写清楚，再决定是否上线。"},
+        {"id": "turn-000003", "speaker": "B", "text": "我性格比较内向，不太喜欢在大群里发言。"},
+        {"id": "turn-000004", "speaker": "C", "text": "这个方案什么时候开始？"}
+      ],
+      "expected": {
+        "participants": [
+          {"speaker": "A", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "B", "person_id": null, "display_name": null, "identity_status": "anonymous"},
+          {"speaker": "C", "person_id": null, "display_name": null, "identity_status": "anonymous"}
+        ],
+        "observations": [
+          {"subject": "A", "kind": "communication_style", "value": "决策前先分析风险", "epistemic_status": "inferred", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000001", "quote": "每次定方案前，我都会先列出风险"}, {"turn_id": "turn-000002", "quote": "先把风险和失败条件写清楚，再决定是否上线"}]},
+          {"subject": "B", "kind": "trait", "value": "内向", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000003", "quote": "我性格比较内向"}]},
+          {"subject": "B", "kind": "preference", "value": "不喜欢在大群体中发言", "epistemic_status": "explicit", "state": "candidate", "durability": "stable", "evidence": [{"turn_id": "turn-000003", "quote": "不太喜欢在大群里发言"}]}
+        ],
+        "forbidden_observations": []
+      }
+    }
+  ]
+}

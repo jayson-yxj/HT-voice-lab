@@ -74,4 +74,8 @@ if __name__ == "__main__":
     check_dialogue_state()
     from test_session_memory import check_session_memory
     check_session_memory()
+    from test_personal_identity import check_personal_identity_fixture
+    check_personal_identity_fixture()
+    from test_participant_context import check_participant_context
+    check_participant_context()
     check_features()

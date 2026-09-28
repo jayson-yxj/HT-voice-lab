@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 
 from dialogue_state import DialogueStateTracker, analyze
-from live_demo import LiveMemoryUpdater
+from live_demo import LiveMemoryUpdater, LiveParticipantUpdater
 from memory_graph import project
 from session_memory import GroqMemoryCompressor, build, ensure_open_tail_question
 
@@ -44,12 +44,24 @@ class _LiveCompressor:
         return dict(
             session_summary="实时演示摘要",
             topics=[dict(name="实时演示", summary="逐步更新。",
-                         evidence_turn_ids=ids)],
+                    evidence_turn_ids=ids)],
             open_questions=[], decisions=[], action_items=[],
             turn_memories=[dict(
                 turn_id=item["id"], summary=item["text"], speech_act="statement",
                 intent="表达观点", stance="neutral", topic_names=["实时演示"], entities=[])
                 for item in turns]), dict(latency_s=0.0)
+
+
+class _PersonalExtractor:
+    name = "test-personal"
+    model = "test-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def extract(self, speaker, evidence, conversation=None):
+        self.calls.append((speaker, [item["source_id"] for item in evidence]))
+        return []
 
 
 def check_session_memory():
@@ -128,13 +140,32 @@ def check_session_memory():
         "turn-000001", "turn-000002", "turn-000003", "turn-000004", "turn-000005"]
     graph = project(memory)
     assert graph["counts"] == {
-        "speakers": 3, "topics": 2, "opinions": 2, "intents": 2, "pending": 1}
+        "speakers": 3, "topics": 2, "opinions": 2, "intents": 2,
+        "personal": 0, "pending": 1}
     assert {item["type"] for item in graph["nodes"]} == {
         "speaker", "topic", "opinion", "intent"}
     assert [(item["type"], item["turn_id"]) for item in graph["edges"]].count(
         ("EXPRESSES", "turn-000002")) == 1
     assert not any(item["type"] == "opinion" and "C还有一点" in item["label"]
                    for item in graph["nodes"])
+    personal = dict(
+        session_id="test-session",
+        participants=[dict(participant_id="test-session:participant:A",
+                           speaker_label="A", display_name="林晓",
+                           identity_status="session_identified")],
+        observations=[dict(
+            observation_id="observation-1", participant_id="test-session:participant:A",
+            kind="preference", value="徒步", epistemic_status="explicit",
+            state="candidate", evidence_quotes=[dict(
+                evidence_id="evidence-1", quote="我喜欢徒步")])],
+        evidence=[dict(evidence_id="evidence-1", source_id="turn-000002")],
+        extraction=dict(provider="fixture", rejected_claims=[]))
+    enriched_graph = project(memory, personal)
+    profile = next(item for item in enriched_graph["nodes"]
+                   if item["id"] == "speaker:A")
+    assert profile["label"] == "A · 林晓"
+    assert profile["details"]["个人信息"] == ["偏好：徒步（explicit，candidate）"]
+    assert enriched_graph["counts"]["personal"] == 1
     memory["working_memory"].append(dict(
         speaker="unresolved", start_s=8, end_s=9, text="重叠片段"))
     assert project(memory)["counts"]["speakers"] == 3
@@ -166,6 +197,22 @@ def check_session_memory():
         assert [item["speaker"] for item in live["turns"]] == ["A", "B"]
         assert compressor.calls == [["turn-000001"], ["turn-000001", "turn-000002"]]
         assert not (Path(temporary) / "session_memory.json.tmp").exists()
+        personal_extractor = _PersonalExtractor()
+        personal = LiveParticipantUpdater(
+            Path(temporary) / "session_memory.json",
+            Path(temporary) / "participant_context.json", personal_extractor)
+        personal.start()
+        personal.request()
+        personal.flush()
+        assert personal_extractor.calls == [
+            ("A", ["turn-000001"]), ("B", ["turn-000002"])]
+        personal.request()
+        personal.flush()
+        assert len(personal_extractor.calls) == 2
+        personal.close()
+        participant_context = json.loads(
+            (Path(temporary) / "participant_context.json").read_text())
+        assert participant_context["stats"]["participants"] == 2
     print("PASS: completed-turn grouping, evidence links, working memory, structured compression")
 
 

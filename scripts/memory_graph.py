@@ -7,6 +7,11 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "web" / "memory_graph.html"
+ATTRIBUTE_NAMES = {
+    "name": "姓名", "role": "职责", "occupation": "职业", "location": "地点",
+    "experience": "经历", "preference": "偏好", "goal": "目标",
+    "relationship": "关系", "communication_style": "交流风格", "trait": "性格",
+}
 
 
 def _items(value, name):
@@ -17,7 +22,7 @@ def _items(value, name):
     return value
 
 
-def project(memory):
+def project(memory, participant_context=None):
     """Return a browser-friendly graph without changing memory semantics."""
     if not isinstance(memory, dict):
         raise ValueError("Session memory must be a JSON object")
@@ -33,11 +38,33 @@ def project(memory):
     source = memory.get("source") or {}
     if not isinstance(source, dict):
         raise ValueError("Session memory field 'source' must be an object")
+    if participant_context is not None:
+        if not isinstance(participant_context, dict):
+            raise ValueError("Participant context must be a JSON object")
+        if participant_context.get("session_id") != memory.get("session_id"):
+            raise ValueError("Participant context belongs to another session")
+    personal_participants = _items(
+        (participant_context or {}).get("participants"), "participant_context.participants")
+    personal_observations = _items(
+        (participant_context or {}).get("observations"), "participant_context.observations")
+    personal_evidence = _items(
+        (participant_context or {}).get("evidence"), "participant_context.evidence")
+    observations_by_participant = {}
+    for item in personal_observations:
+        if not isinstance(item, dict):
+            raise ValueError("Every personal observation must be an object")
+        observations_by_participant.setdefault(item.get("participant_id"), []).append(item)
+    personal_by_speaker = {item.get("speaker_label"): item for item in personal_participants
+                           if isinstance(item, dict) and item.get("speaker_label")}
+    evidence_by_id = {item.get("evidence_id"): item for item in personal_evidence
+                      if isinstance(item, dict) and item.get("evidence_id")}
 
     speakers = []
     for name in [*_items(memory.get("participants"), "participants"),
                  *(item.get("speaker") for item in turns),
-                 *(item.get("speaker") for item in working)]:
+                 *(item.get("speaker") for item in working),
+                 *(item.get("speaker_label") for item in personal_participants
+                   if isinstance(item, dict))]:
         if isinstance(name, str) and name and name != "unresolved" and name not in speakers:
             speakers.append(name)
 
@@ -75,9 +102,30 @@ def project(memory):
     for speaker in speakers:
         completed = [item.get("id") for item in turns if item.get("speaker") == speaker]
         pending = [item for item in working if item.get("speaker") == speaker]
-        add_node("speaker:" + speaker, "speaker", speaker, {
-            "已完成话轮": len(completed), "待完成发言": len(pending),
-        }, completed)
+        participant = personal_by_speaker.get(speaker)
+        observations = (observations_by_participant.get(participant.get("participant_id"), [])
+                        if participant else [])
+        details = {"已完成话轮": len(completed), "待完成发言": len(pending)}
+        label = speaker
+        if participant:
+            name = participant.get("display_name")
+            details["会话姓名"] = name or "未知"
+            details["身份状态"] = participant.get("identity_status") or "anonymous"
+            details["个人信息"] = ["{}：{}（{}，{}）".format(
+                ATTRIBUTE_NAMES.get(item.get("kind"), item.get("kind")),
+                item.get("value"), item.get("epistemic_status"), item.get("state"))
+                for item in observations] or ["暂无"]
+            details["逐字证据"] = ["{}：{}".format(
+                evidence_by_id.get(quote.get("evidence_id"), {}).get("source_id", "未知话轮"),
+                quote.get("quote", ""))
+                for item in observations for quote in item.get("evidence_quotes", [])] or ["暂无"]
+            details["问答上下文"] = ["{}：{}".format(
+                evidence_by_id.get(quote.get("evidence_id"), {}).get("source_id", "未知话轮"),
+                quote.get("quote", ""))
+                for item in observations for quote in item.get("context_quotes", [])] or ["无需"]
+            if name:
+                label = "{} · {}".format(speaker, name)
+        add_node("speaker:" + speaker, "speaker", label, details, completed)
 
     for index, (name, info) in enumerate(topic_info.items(), 1):
         add_node("topic:{:04d}".format(index), "topic", name, {
@@ -151,18 +199,29 @@ def project(memory):
             "speakers": len([node for node in nodes if node["type"] == "speaker"]),
             "topics": len([node for node in nodes if node["type"] == "topic"]),
             "opinions": len(turns), "intents": len(intent_nodes),
-            "pending": len(pending),
+            "personal": len(personal_observations), "pending": len(pending),
         },
         "nodes": nodes, "edges": edges, "working_memory": pending,
+        "personal_context": {
+            "available": participant_context is not None,
+            "provider": ((participant_context or {}).get("extraction") or {}).get("provider"),
+            "rejected_claims": len(((participant_context or {}).get("extraction") or {}).get(
+                "rejected_claims", [])),
+        },
     }
 
 
-def load_graph(path):
-    return project(json.loads(path.read_text(encoding="utf-8")))
+def load_graph(path, participant_path=None):
+    context = (json.loads(participant_path.read_text(encoding="utf-8"))
+               if participant_path and participant_path.is_file() else None)
+    return project(json.loads(path.read_text(encoding="utf-8")), context)
 
 
-def create_server(path, host="127.0.0.1", port=8765, require_file=True):
+def create_server(path, host="127.0.0.1", port=8765, require_file=True,
+                  participant_context=None):
     source = Path(path).expanduser().resolve()
+    participant_source = (Path(participant_context).expanduser().resolve()
+                          if participant_context else source.with_name("participant_context.json"))
     if require_file and not source.is_file():
         raise OSError("Session memory is missing: {}".format(source))
     if not PAGE.is_file():
@@ -191,10 +250,15 @@ def create_server(path, host="127.0.0.1", port=8765, require_file=True):
                 return self._send(404, "text/plain; charset=utf-8", "Not found\n".encode())
             try:
                 stat = source.stat()
-                etag = '"{}-{}"'.format(stat.st_mtime_ns, stat.st_size)
+                personal_stat = participant_source.stat() if participant_source.is_file() else None
+                etag = '"{}-{}-{}-{}"'.format(
+                    stat.st_mtime_ns, stat.st_size,
+                    personal_stat.st_mtime_ns if personal_stat else 0,
+                    personal_stat.st_size if personal_stat else 0)
                 if self.headers.get("If-None-Match") == etag:
                     return self._send(304, "application/json", etag=etag)
-                body = json.dumps(load_graph(source), ensure_ascii=False).encode("utf-8")
+                body = json.dumps(load_graph(source, participant_source),
+                                  ensure_ascii=False).encode("utf-8")
                 self._send(200, "application/json; charset=utf-8", body, etag)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 body = json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8")

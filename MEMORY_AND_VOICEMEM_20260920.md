@@ -123,3 +123,30 @@ flowchart LR
 融合模块会在每个稳定声学片段收尾时原子更新 `speech_spans.json`；常驻语义状态机只消费尚未处理的稳定片段，随后重建 `dialogue_state.json` 与 `session_memory.json`。限制 Qwen 显存的人工 ASR 窗口不会触发语义完成或观点写入。
 
 首版使用 JSON 图和浏览器可视化即可，不引入图数据库。会话内只有几十到几百个节点，图数据库目前没有必要。
+
+## 下一阶段：会话内匿名人物与个人信息
+
+2026-09-24 已确认后续视觉模态，因此长期人物库暂缓。下一切片仍在本项目中作为独立后处理开发：
+
+1. 定义模态无关的 `Participant`、`Observation`、`Evidence` 和 `Association` 协议；
+2. 从当前 A/B/C/D 自动建立会话内匿名参与者；
+3. 从原始完成话轮提取个人信息，未知字段保持 `null` 或空数组；
+4. 结果单独写入计划中的 `participant_context.json`，不改变现有 `session_memory.json`。
+
+固定开发顺序、模块边界和完成条件见 [多模态人物计划](MULTIMODAL_IDENTITY_PLAN_20260924.md)。模型实现前先使用 [个人信息验收夹具](fixtures/personal_identity_eval.json) 固定同名、转述、点名、事实修正和推断边界，避免根据某一次模型输出反向修改标准答案。
+
+匿名人物、证据基础层和带证据的个人信息提取已经实现：
+
+```bash
+./lab build-participant-context results/某次运行/session_memory.json
+```
+
+不加参数时该命令不调用模型，输出独立的 `participant_context.json`。加上 `--personal-provider groq` 后按人物提取会话内候选信息；未知字段为空，姓名只建立会话内显示名，`person_id` 仍保持 `null`。正式结构位于 `schemas/participant_context.schema.json`。
+
+`demo` 现已在每次会话记忆成功写入后异步请求个人资料更新。后台队列会合并积压快照，并按证据变化只重算相关人物；网页同时监听会话记忆和人物上下文。问答型短回答使用对方问题作为 `context_quotes`，但观察的主证据仍必须来自被记录人物自己的话轮。
+
+冻结夹具可独立复测：
+
+```bash
+./lab eval-personal-identity --proxy http://127.0.0.1:7890
+```

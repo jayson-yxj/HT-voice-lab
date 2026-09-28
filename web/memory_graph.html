@@ -133,7 +133,7 @@
     function render(data) {
       document.querySelector('#title').textContent = data.session.id;
       document.querySelector('#summary').textContent = data.session.summary;
-      const names = {speakers:'人物', topics:'话题', opinions:'观点', intents:'意图', pending:'待完成'};
+      const names = {speakers:'人物', topics:'话题', opinions:'观点', intents:'意图', personal:'个人信息', pending:'待完成'};
       const counts = document.querySelector('#counts'); counts.replaceChildren();
       for (const [key, value] of Object.entries(data.counts)) {
         const pill = document.createElement('span'); pill.className = 'pill';
@@ -168,7 +168,8 @@
         });
         group.append(label);
         const sub = svg('text', {x:p.x+15, y:p.y+p.h-12, class:'sub'});
-        sub.textContent = node.type === 'opinion' ? `${node.details.人物} · ${node.details.时间}` : ({speaker:'人物',topic:'话题',intent:'意图'}[node.type]);
+        sub.textContent = node.type === 'opinion' ? `${node.details.人物} · ${node.details.时间}` :
+          (node.type === 'speaker' && node.details.个人信息 ? `${node.details.个人信息.filter(x => x !== '暂无').length} 条个人信息` : ({speaker:'人物',topic:'话题',intent:'意图'}[node.type]));
         group.append(sub);
         group.addEventListener('click', () => showDetails(node));
         group.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') showDetails(node); });

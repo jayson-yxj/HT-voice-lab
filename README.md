@@ -23,6 +23,7 @@
 - Qwen 已加入 12/15 秒有界声学窗口和 1.5 秒预卷去重；中英长样本整卡峰值从 7619 MiB 降至 4464 MiB，首次出字约 2.15 秒。SenseVoiceSmall 的独立 15 秒窗口筛选峰值约 1719 MiB，但当前中英文准确度不如 Qwen 稳定。详见 [显存与轻量模型复核](ASR_MEMORY_20260917.md)。
 - 已新增独立的每说话人语义状态与回复门控：其他人讲话、静音和声学窗口都不会自动结束某人的话轮；只有完整的显式点名请求才允许回复。普通语义结束仍等待接入模型。详见 [语义话轮与回复门控](SEMANTIC_TURN_20260918.md)。
 - 已加入临时槽位稳定层：1.5 秒开始比对声纹、每 0.5 秒复核、持续 4 秒的新槽位才创建新人；不足时长的孤立槽位保留转写和审计，但不创建人物。短暂槽位允许以 0.30 阈值合并，持续槽位须达到 0.45 才能合并，避免把音色相近的真实新人错误折叠。两条双人和一条四人长样本分别稳定为 2 / 2 / 4 人，详见 [英文长会话测试](ENGLISH_LONG_SESSION_20260920.md)。
+- 已完成语音侧多模态人物基础层：正式协议、A/B/C/D 匿名参与者、完成话轮证据和实时个人信息提取已经实现；未知字段保持为空，手动绑定只作为以后纠错。固定验收夹具和后续顺序见 [多模态人物计划](MULTIMODAL_IDENTITY_PLAN_20260924.md)。
 
 详细检查结果见 [ENVIRONMENT_STATUS.md](ENVIRONMENT_STATUS.md)。
 
@@ -163,14 +164,14 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 
 ### 一条命令实时演示
 
-下面的命令从文件音频开始，以真实时间运行辨人和转写；每个稳定个人片段完成后，依次更新语义状态、当前会话记忆和浏览器关系图：
+下面的命令从文件音频开始，以真实时间运行辨人和转写；每个稳定个人片段完成后更新语义状态和当前会话记忆，并在后台合并更新个人资料和浏览器关系图：
 
 ```bash
 ./lab demo data/prepared/cctv-robot-industry-30e19903a3e0.wav \
   --groq-proxy http://127.0.0.1:7890
 ```
 
-默认使用 Qwen3-ASR、Groq 语义判断与记忆压缩，并打开 `http://127.0.0.1:8765`。输出保存到新的 `results/*-demo/` 目录；图在音频处理期间持续读取同一份 `session_memory.json`。按 `Ctrl+C` 停止演示服务。已有服务占用端口时可传 `--port 8766`，固定结果目录可传 `--output`。
+默认使用 Qwen3-ASR、Groq 语义判断、记忆压缩与个人信息提取，并打开 `http://127.0.0.1:8765`。输出保存到新的 `results/*-demo/` 目录；图同时监听 `session_memory.json` 和 `participant_context.json`。个人提取不会阻塞 ASR，忙碌时多个中间快照合并为最新状态，只重算出现新增完成话轮的人。按 `Ctrl+C` 停止演示服务。已有服务占用端口时可传 `--port 8766`，固定结果目录可传 `--output`。
 
 `demo` 会在加载音频模型前检查 Groq 密钥及模型权限，避免整段音频完成后才发现语义图为空。也可以单独检查：
 
@@ -180,7 +181,7 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 
 只有 `speaker_change`、`silence_gap`、`overlap_boundary` 或 `eof` 等稳定片段才进入语义链路。Qwen 为限制显存产生的 `asr_window_pause` / `asr_window_limit` 人工窗口只更新转写快照，不会被误当成某个人讲完。未完成话轮保留在 `working_memory`，其他人开始发言不会替它完成。
 
-图中的“话题”采用会话级粒度，表示多人共同讨论的问题或议程；每位人物提出的场景、供应链、成本等答案内容属于各自观点，不会再拆成独立话题。音频结束后仍需等待最后一次 `[live] 正在压缩会话记忆…` 完成；看到 `Demo complete` 后再按 `Ctrl+C`，否则最后一个话轮可能尚未写入图。
+图中的“话题”采用会话级粒度，表示多人共同讨论的问题或议程；每位人物提出的场景、供应链、成本等答案内容属于各自观点，不会再拆成独立话题。音频结束后仍需等待最后一次 `[live] 正在压缩会话记忆…` 和 `[personal] 已更新…` 完成；看到 `Demo complete` 后再按 `Ctrl+C`，否则最后一个话轮或个人资料可能尚未写入图。
 
 快速检查整条链路可使用较短音频、Paraformer 和非实时回放：
 
@@ -211,6 +212,26 @@ Qwen 使用独立的 Python 3.12 环境 `.venv-qwen/`，通过本机子进程与
 ```
 
 命令默认打开 `http://127.0.0.1:8765`。页面每秒检查文件版本；`session_memory.json` 被重新生成后自动更新，并保留每条观点的话轮编号、人物、时间、立场和原始贡献 ID。尚未完成的 `working_memory` 单独列出，不会提前固化为观点。服务只监听本机，按 `Ctrl+C` 停止；可用 `--port` 更换端口，或用 `--no-open` 禁止自动打开浏览器。
+
+### 匿名参与者与多模态证据基础
+
+从现有会话记忆自动建立 A/B/C/D 对应的会话内匿名参与者，并恢复已完成话轮原文：
+
+```bash
+./lab build-participant-context results/某次运行/session_memory.json
+```
+
+默认在同一目录生成 `participant_context.json`。这一基础命令不调用模型：`person_id` 和未知姓名保持 `null`，`observations` 与 `associations` 保持空数组。它会验证 `dialogue_state.json`、每条完成话轮的来源 ID 和 SHA-256；未完成发言、无法归属的重叠片段和 `unresolved` 不会成为个人信息证据。正式结构见 [participant context schema](schemas/participant_context.schema.json)。
+
+在同一输出中提取姓名、职业、地点、偏好、目标、关系、性格和交流风格候选：
+
+```bash
+./lab build-participant-context results/某次运行/session_memory.json \
+  --personal-provider groq \
+  --personal-proxy http://127.0.0.1:7890
+```
+
+提取按 A/B/C/D 分开写入；模型可以读取其他人的提问来理解 “Coffee” 之类的简短回答，但个人信息的主证据必须来自目标人物。提问另存为 `context_quotes`，跨人物主证据、改写引文和只有一条证据的推断会写入 `extraction.rejected_claims`，不会进入人物资料。未获得资料的人保持匿名和空观察；同名人物也不会合并。可用 `./lab eval-personal-identity --proxy http://127.0.0.1:7890` 重跑冻结夹具。
 
 已评审 VoiceMem。当前复用其“证据保留、话轮后异步写入、轻量上层索引、流式预取”思想，不安装整包；其音频前端与本项目重复，固定依赖也会改变现有验证环境。真实 4 人样本已生成 6 条话轮记忆，压缩文本约为原始的 56%。评审、结构和结果见 [当前会话记忆与 VoiceMem 评审](MEMORY_AND_VOICEMEM_20260920.md)。
 
@@ -262,6 +283,7 @@ FunASR 1.4.15 将小于 60ms 的收尾输入当作缓存排出操作；融合入
 | `transcript.txt` | 合并人工窗口后的可读转写 |
 | `dialogue_state.json` | 每个说话人的独立语义状态、打断／续说记录和显式回复请求 |
 | `session_memory.json` | `demo` 持续更新的会话摘要、逐人观点、话题、意图、证据和待完成发言 |
+| `participant_context.json` | `demo` 后台持续更新的匿名参与者、个人信息、回答证据和问答上下文；也可用独立命令重建 |
 | `comparison.csv` | `compare` 的汇总结果 |
 
 ### 如何理解速度数字

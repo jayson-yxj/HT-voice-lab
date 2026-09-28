@@ -2,6 +2,7 @@
 from datetime import datetime
 import json
 from pathlib import Path
+from queue import Full, Queue
 import subprocess
 import sys
 import threading
@@ -12,6 +13,8 @@ from common import ROOT, write_json
 from dialogue_state import DialogueStateTracker
 from groq_semantic import GroqSemanticJudge, check_model_access
 from memory_graph import create_server
+from participant_context import (GroqPersonalInfoExtractor, build_from_path,
+                                 refresh_with_personal_info)
 from session_memory import GroqMemoryCompressor, build, empty, save
 
 
@@ -21,7 +24,7 @@ ARTIFICIAL_CLOSES = {"asr_window_pause", "asr_window_limit"}
 class LiveMemoryUpdater:
     """Consume each stable speech span once and replace the memory snapshot."""
 
-    def __init__(self, tracker, compressor, output, session_id):
+    def __init__(self, tracker, compressor, output, session_id, on_memory_saved=None):
         self.tracker = tracker
         self.compressor = compressor
         self.output = Path(output)
@@ -29,11 +32,17 @@ class LiveMemoryUpdater:
         self.memory_path = self.output / "session_memory.json"
         self.session_id = session_id
         self.processed = []
+        self.on_memory_saved = on_memory_saved
+
+    def _save(self, memory):
+        save(self.memory_path, memory)
+        if self.on_memory_saved:
+            self.on_memory_saved()
 
     def initialize(self):
         dialogue = self.tracker.result()
         write_json(self.dialogue_path, dialogue)
-        save(self.memory_path, empty(
+        self._save(empty(
             dialogue, self.dialogue_path, self.session_id, self.compressor))
 
     @staticmethod
@@ -66,7 +75,7 @@ class LiveMemoryUpdater:
             else:
                 memory = empty(dialogue, self.dialogue_path,
                                self.session_id, self.compressor)
-            save(self.memory_path, memory)
+            self._save(memory)
             self.processed.append(self._signature(span))
             count += 1
             state = "完成" if record.get("turn_complete") is True else "待续说"
@@ -74,6 +83,71 @@ class LiveMemoryUpdater:
                 record.get("speaker") or "重叠未分离", state,
                 record.get("text") or "（无文字）"), flush=True)
         return count
+
+
+class LiveParticipantUpdater:
+    """Coalesce memory snapshots and refresh only speakers with new evidence."""
+
+    def __init__(self, memory_path, context_path, extractor):
+        self.memory_path = Path(memory_path)
+        self.context_path = Path(context_path)
+        self.extractor = extractor
+        self.pending = Queue(maxsize=1)
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.context = None
+        self.error = None
+        self.started = False
+
+    def start(self):
+        self.thread.start()
+        self.started = True
+
+    def request(self):
+        try:
+            self.pending.put_nowait(True)
+        except Full:
+            pass
+
+    def _build_latest(self):
+        for attempt in range(5):
+            try:
+                return build_from_path(self.memory_path)
+            except ValueError as exc:
+                if "SHA-256" not in str(exc) or attempt == 4:
+                    raise
+                time.sleep(0.05)
+
+    def _run(self):
+        while True:
+            item = self.pending.get()
+            try:
+                if item is None:
+                    return
+                context, changed = refresh_with_personal_info(
+                    self._build_latest(), self.extractor, self.context)
+                write_json(self.context_path, context)
+                self.context = context
+                self.error = None
+                if changed:
+                    print("[personal] 已更新 {}：共 {} 条个人信息。".format(
+                        "/".join(changed), context["stats"]["observations"]), flush=True)
+            except Exception as exc:  # Keep audio and session memory running.
+                self.error = exc
+                print("[personal] 更新失败：{}".format(exc), file=sys.stderr, flush=True)
+            finally:
+                self.pending.task_done()
+
+    def flush(self):
+        self.pending.join()
+        if self.error:
+            raise RuntimeError("Personal context update failed: {}".format(self.error))
+
+    def close(self):
+        if not self.started:
+            return
+        self.pending.join()
+        self.pending.put(None)
+        self.thread.join()
 
 
 def _inference_command(args, output):
@@ -115,9 +189,16 @@ def run(args):
         minimum_interval=args.semantic_minimum_interval)
     compressor = GroqMemoryCompressor(
         args.memory_model, args.memory_timeout, proxy=args.groq_proxy)
+    personal_extractor = GroqPersonalInfoExtractor(
+        args.memory_model, args.memory_timeout, proxy=args.groq_proxy,
+        minimum_interval=args.semantic_minimum_interval)
     tracker = DialogueStateTracker(aliases, args.invocation_context_seconds, judge)
-    updater = LiveMemoryUpdater(tracker, compressor, output,
-                                args.session_id or output.name)
+    personal = LiveParticipantUpdater(
+        output / "session_memory.json", output / "participant_context.json",
+        personal_extractor)
+    updater = LiveMemoryUpdater(
+        tracker, compressor, output, args.session_id or output.name,
+        on_memory_saved=personal.request)
 
     server, _, url = create_server(
         output / "session_memory.json", args.host, args.port, require_file=False)
@@ -135,6 +216,7 @@ def run(args):
             if process.poll() is not None:
                 raise RuntimeError("Conversation inference stopped before creating output")
             time.sleep(0.1)
+        personal.start()
         updater.initialize()
         spans_path = output / "speech_spans.json"
         revision = None
@@ -156,6 +238,7 @@ def run(args):
                 process.returncode))
         if spans_path.is_file():
             updater.sync(json.loads(spans_path.read_text()))
+        personal.flush()
         print("Demo complete. The graph remains open; press Ctrl+C to stop.", flush=True)
         while viewer.is_alive():
             viewer.join(1)
@@ -171,4 +254,5 @@ def run(args):
                 process.wait()
         server.shutdown()
         server.server_close()
+        personal.close()
     return 0
