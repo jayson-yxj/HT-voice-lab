@@ -194,6 +194,12 @@ def main():
                            help="Audio pre-roll used to recover words across Qwen window boundaries")
             p.add_argument("--silence-gap", type=float, default=0.8,
                            help="Conversation ASR segment silence gap in seconds; not semantic turn completion")
+            p.add_argument("--max-global-speakers", type=int, default=12,
+                           help="Session-wide identities; Sortformer still handles at most four local speakers")
+            p.add_argument("--speaker-episode-gap", type=float, default=6.0,
+                           help="Silence that starts a new local-speaker episode")
+            p.add_argument("--speaker-slot-recheck-gap", type=float, default=8.0,
+                           help="Recheck a reused local slot after this many seconds")
             p.add_argument("--no-speaker-stabilization", dest="speaker_stabilization",
                            action="store_false", default=True,
                            help="Use raw Sortformer slots without CPU voiceprint stabilization")
@@ -283,6 +289,9 @@ def main():
     p.add_argument("--qwen-window-limit", type=float, default=15.0)
     p.add_argument("--qwen-window-overlap", type=float, default=1.5)
     p.add_argument("--silence-gap", type=float, default=0.8)
+    p.add_argument("--max-global-speakers", type=int, default=12)
+    p.add_argument("--speaker-episode-gap", type=float, default=6.0)
+    p.add_argument("--speaker-slot-recheck-gap", type=float, default=8.0)
     p.add_argument("--no-speaker-stabilization", dest="speaker_stabilization",
                    action="store_false", default=True)
     p.add_argument("--assistant-alias", action="append")

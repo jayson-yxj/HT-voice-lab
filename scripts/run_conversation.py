@@ -9,6 +9,18 @@ from run_asr import SegmentASR, load_model
 from run_sortformer import SortformerStream
 
 
+def speaker_label(index):
+    """Return stable spreadsheet-style labels: A..Z, AA..AZ, ..."""
+    if not isinstance(index, int) or index < 0:
+        raise ValueError("Speaker index must be a non-negative integer")
+    label = ""
+    value = index + 1
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
+
+
 class PyannoteVoiceEncoder:
     """Small CPU voiceprint encoder used only to link provisional speaker slots."""
 
@@ -39,8 +51,10 @@ class SpeakerStabilizer:
                  match_threshold=0.30, match_margin=0.15,
                  persistent_match_threshold=0.45,
                  max_hold_samples=4 * SR, prototype_samples=8 * SR,
-                 max_speakers=4, recheck_samples=round(0.5 * SR),
-                 appearance_gap_samples=round(0.8 * SR)):
+                 max_speakers=12, recheck_samples=round(0.5 * SR),
+                 appearance_gap_samples=round(0.8 * SR),
+                 episode_gap_samples=round(6 * SR),
+                 trusted_slot_reuse_samples=round(8 * SR)):
         self.encoder = encoder
         self.confirm_samples = confirm_samples
         self.match_threshold = match_threshold
@@ -51,12 +65,18 @@ class SpeakerStabilizer:
         self.max_speakers = max_speakers
         self.recheck_samples = recheck_samples
         self.appearance_gap_samples = appearance_gap_samples
+        self.episode_gap_samples = episode_gap_samples
+        self.trusted_slot_reuse_samples = trusted_slot_reuse_samples
         self.pending = []
         self.active = {}
         self.trusted_slots = {}
+        self.trusted_slot_episodes = {}
+        self.slot_last_end = {}
         self.prototypes = {}
         self.audit = []
         self.processed = 0
+        self.episode_index = 0
+        self.last_speech_end = None
         self.closed = False
         self.config = dict(
             enabled=True, encoder="pyannote/embedding-cpu",
@@ -65,8 +85,12 @@ class SpeakerStabilizer:
             persistent_match_threshold=persistent_match_threshold,
             recheck_seconds=recheck_samples / SR,
             appearance_gap_seconds=appearance_gap_samples / SR,
+            episode_gap_seconds=episode_gap_samples / SR,
+            trusted_slot_reuse_seconds=trusted_slot_reuse_samples / SR,
             max_hold_seconds=max_hold_samples / SR,
             prototype_seconds=prototype_samples / SR,
+            local_speaker_slots=4,
+            max_global_speakers=max_speakers,
             short_policy="unresolved_without_person_promotion")
 
     @property
@@ -100,11 +124,28 @@ class SpeakerStabilizer:
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         best = ranked[0] if ranked else None
         second = ranked[1][1] if len(ranked) > 1 else -1.0
-        threshold = (self.match_threshold if allow_borderline_match else
-                     self.persistent_match_threshold)
+        trusted = self.trusted_slots.get(appearance["slot"])
+        same_episode_slot = (
+            trusted is not None
+            and self.trusted_slot_episodes.get(appearance["slot"])
+            == appearance["episode_index"]
+        )
+        slot_supported_match = bool(
+            allow_new and same_episode_slot and best and best[0] == trusted
+        )
+        threshold = (
+            self.match_threshold
+            if allow_borderline_match or slot_supported_match
+            else self.persistent_match_threshold
+        )
         if (best and best[1] >= threshold
                 and best[1] - second >= self.match_margin):
-            self._apply(appearance, best[0], "voiceprint_match", scores)
+            self._apply(
+                appearance,
+                best[0],
+                "voiceprint_slot_match" if slot_supported_match else "voiceprint_match",
+                scores,
+            )
             return True
         appearance["scores"] = scores
         if not allow_new:
@@ -113,6 +154,7 @@ class SpeakerStabilizer:
             canonical = len(self.prototypes)
             self.prototypes[canonical] = embedding
             self.trusted_slots[appearance["slot"]] = canonical
+            self.trusted_slot_episodes[appearance["slot"]] = appearance["episode_index"]
             self._apply(appearance, canonical, "confirmed_new_speaker", scores)
             return True
         self._apply(appearance, None, "unresolved_speaker_limit", scores)
@@ -126,21 +168,23 @@ class SpeakerStabilizer:
         if not appearance["resolved"]:
             self._apply(appearance, None, "short_unresolved")
         canonical = appearance["canonical"]
-        if (canonical is not None and self.trusted_slots.get(slot) == canonical
-                and appearance["single_samples"] >= self.confirm_samples):
-            embedding = self._embed(appearance)
-            if embedding is not None:
-                previous = self.prototypes[canonical]
-                combined = previous * 0.25 + embedding * 0.75
-                self.prototypes[canonical] = combined / np.linalg.norm(combined)
+        if canonical is not None and self.trusted_slots.get(slot) == canonical:
+            self.slot_last_end[slot] = appearance["end_sample"]
+            if appearance["single_samples"] >= self.confirm_samples:
+                embedding = self._embed(appearance)
+                if embedding is not None:
+                    previous = self.prototypes[canonical]
+                    combined = previous * 0.25 + embedding * 0.75
+                    self.prototypes[canonical] = combined / np.linalg.norm(combined)
         self.audit.append(dict(
+            episode_id="episode-{:04d}".format(appearance["episode_index"]),
             start_s=appearance["start_sample"] / SR,
             end_s=appearance["end_sample"] / SR,
             raw_speaker="speaker{}".format(slot),
-            speaker=("ABCD"[canonical] if canonical is not None else None),
+            speaker=(speaker_label(canonical) if canonical is not None else None),
             decision=appearance["reason"],
             single_speaker_audio_s=appearance["single_samples"] / SR,
-            similarities={"ABCD"[key]: round(value, 4)
+            similarities={speaker_label(key): round(value, 4)
                           for key, value in appearance["scores"].items()}))
 
     def _drain(self):
@@ -153,10 +197,10 @@ class SpeakerStabilizer:
             canonical = sorted({value for value in item["decisions"].values()
                                 if value is not None})
             unresolved = any(value is None for value in item["decisions"].values())
-            labels = ["ABCD"[value] for value in canonical]
+            labels = [speaker_label(value) for value in canonical]
             if unresolved:
-                candidates = labels + ["ABCD"[value] for value in sorted(self.prototypes)
-                                       if "ABCD"[value] not in labels]
+                candidates = labels + [speaker_label(value) for value in sorted(self.prototypes)
+                                       if speaker_label(value) not in labels]
                 candidates.append("未确认")
                 attribution = "short_unresolved"
             else:
@@ -168,6 +212,11 @@ class SpeakerStabilizer:
                 speakers=canonical, speaker_labels=labels,
                 speaker_candidates=candidates, attribution=attribution,
                 raw_speakers=list(item["raw_speakers"]),
+                speaker_episode_id="episode-{:04d}".format(item["episode_index"]),
+                local_speaker_refs=[
+                    "episode-{:04d}:slot-{}".format(item["episode_index"], slot)
+                    for slot in item["raw_speakers"]
+                ],
                 stabilization_reasons=dict(item["reasons"]))
             output.append((frame, item["audio"]))
         return output
@@ -180,24 +229,39 @@ class SpeakerStabilizer:
         if raw != sorted(set(raw)) or any(slot not in range(4) for slot in raw):
             raise ValueError("Expected distinct raw Sortformer slots 0..3")
         self.processed = end
+        if raw:
+            if self.last_speech_end is None:
+                self.episode_index = 1
+            elif start - self.last_speech_end >= self.episode_gap_samples:
+                self.episode_index += 1
+            self.last_speech_end = end
         for slot, appearance in list(self.active.items()):
             if slot not in raw:
                 appearance["gap_samples"] += end - start
                 if raw or appearance["gap_samples"] >= self.appearance_gap_samples:
                     self._close(slot)
         item = dict(start_sample=start, end_sample=end, audio=audio.copy(),
+                    episode_index=max(1, self.episode_index),
                     raw_speakers=list(raw), decisions={}, reasons={})
         self.pending.append(item)
         for slot in raw:
             appearance = self.active.get(slot)
             if appearance is None:
                 appearance = dict(slot=slot, start_sample=start, end_sample=end,
+                                  episode_index=max(1, self.episode_index),
                                   items=[], audio=[], single_samples=0,
                                   next_check_samples=self.confirm_samples,
                                   gap_samples=0,
                                   resolved=False, canonical=None, reason=None, scores={})
                 self.active[slot] = appearance
-                if slot in self.trusted_slots:
+                last_end = self.slot_last_end.get(slot)
+                trusted_here = (
+                    slot in self.trusted_slots
+                    and self.trusted_slot_episodes.get(slot) == appearance["episode_index"]
+                    and last_end is not None
+                    and start - last_end <= self.trusted_slot_reuse_samples
+                )
+                if trusted_here:
                     self._apply(appearance, self.trusted_slots[slot], "trusted_slot")
             appearance["end_sample"] = end
             appearance["gap_samples"] = 0
@@ -237,7 +301,8 @@ class SpeakerStabilizer:
         counts = {}
         for item in self.audit:
             counts[item["decision"]] = counts.get(item["decision"], 0) + 1
-        return dict(confirmed_speakers=len(self.prototypes), decisions=counts,
+        return dict(confirmed_speakers=len(self.prototypes), episodes=self.episode_index,
+                    decisions=counts,
                     unresolved_appearances=sum(item["speaker"] is None for item in self.audit))
 
 
@@ -304,8 +369,9 @@ class AttributionRouter:
         slots = frame["speakers"]
         if self.closed or start != self.processed or end <= start or len(audio) != end - start:
             raise ValueError("Expected contiguous PCM frames before EOF")
-        if slots != sorted(set(slots)) or any(s not in range(4) for s in slots):
-            raise ValueError("Expected distinct Sortformer slots 0..3")
+        if (slots != sorted(set(slots))
+                or any(not isinstance(slot, int) or slot < 0 for slot in slots)):
+            raise ValueError("Expected distinct non-negative global speaker indexes")
         self.processed = end
         unresolved_short = frame.get("attribution") == "short_unresolved"
         if not slots and not unresolved_short:
@@ -315,10 +381,13 @@ class AttributionRouter:
                     self._close("silence_gap")
             return
         speakers = (list(frame["speaker_candidates"]) if unresolved_short else
-                    list(frame.get("speaker_labels", ["ABCD"[s] for s in slots])))
+                    list(frame.get("speaker_labels", [speaker_label(s) for s in slots])))
         attribution = ("short_unresolved" if unresolved_short else
                        "single_speaker" if len(speakers) == 1 else "overlap_unresolved")
         raw_slots = list(frame.get("raw_speakers", slots))
+        if (raw_slots != sorted(set(raw_slots))
+                or any(slot not in range(4) for slot in raw_slots)):
+            raise ValueError("Expected distinct raw Sortformer slots 0..3")
         reasons = {str(slot): reason for slot, reason in
                    frame.get("stabilization_reasons", {}).items()}
         rollover = None
@@ -336,6 +405,9 @@ class AttributionRouter:
                                 speaker=speakers[0] if attribution == "single_speaker" else None,
                                 speaker_candidates=speakers,
                                 attribution=attribution, raw_speaker_slots=raw_slots,
+                                speaker_episode_ids=[frame.get("speaker_episode_id")]
+                                if frame.get("speaker_episode_id") else [],
+                                local_speaker_refs=list(frame.get("local_speaker_refs", [])),
                                 stabilization_reasons=reasons,
                                 start_sample=start, end_sample=start, text="",
                                 timestamp_scope="source_audio_segment_not_word_timestamps",
@@ -346,6 +418,11 @@ class AttributionRouter:
         else:
             self.current["raw_speaker_slots"] = sorted(set(
                 self.current["raw_speaker_slots"] + raw_slots))
+            self.current["speaker_episode_ids"] = list(dict.fromkeys(
+                self.current["speaker_episode_ids"]
+                + ([frame.get("speaker_episode_id")] if frame.get("speaker_episode_id") else [])))
+            self.current["local_speaker_refs"] = list(dict.fromkeys(
+                self.current["local_speaker_refs"] + list(frame.get("local_speaker_refs", []))))
             self.current["stabilization_reasons"].update(reasons)
         if len(self.gap):
             self._accept(self.gap, start)
@@ -407,7 +484,19 @@ def _run(args, resources):
     start = time.monotonic()
     diarizer = SortformerStream(args.device, args.threshold)
     stabilization_enabled = getattr(args, "speaker_stabilization", True)
-    stabilizer = SpeakerStabilizer(PyannoteVoiceEncoder()) if stabilization_enabled else None
+    max_global_speakers = getattr(args, "max_global_speakers", 12)
+    stabilizer = (
+        SpeakerStabilizer(
+            PyannoteVoiceEncoder(),
+            max_speakers=max_global_speakers,
+            episode_gap_samples=round(getattr(args, "speaker_episode_gap", 6.0) * SR),
+            trusted_slot_reuse_samples=round(
+                getattr(args, "speaker_slot_recheck_gap", 8.0) * SR
+            ),
+        )
+        if stabilization_enabled
+        else None
+    )
     asr_name = getattr(args, "asr_model", "paraformer")
     if asr_name == "qwen3":
         if args.device != "cuda":
@@ -435,7 +524,9 @@ def _run(args, resources):
                   speaker_stabilization=stabilization_config,
                   warmup_performed=bool(asr_config.get("warmup")),
                   routing=routing,
-                  silence_gap_seconds=args.silence_gap, speaker_labels={str(i): c for i, c in enumerate("ABCD")},
+                  silence_gap_seconds=args.silence_gap,
+                  speaker_labels={str(i): speaker_label(i)
+                                  for i in range(max_global_speakers)},
                   overlap="transcribe once, speaker=null, retain all candidate speakers",
                   timestamps="source audio segments; no word timestamps",
                   final_semantics="ASR segment closed; turn_complete remains null",

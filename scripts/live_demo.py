@@ -161,6 +161,9 @@ def _inference_command(args, output):
         "--qwen-window-limit", str(args.qwen_window_limit),
         "--qwen-window-overlap", str(args.qwen_window_overlap),
         "--silence-gap", str(args.silence_gap),
+        "--max-global-speakers", str(args.max_global_speakers),
+        "--speaker-episode-gap", str(args.speaker_episode_gap),
+        "--speaker-slot-recheck-gap", str(args.speaker_slot_recheck_gap),
     ]
     if args.fast:
         command.append("--fast")

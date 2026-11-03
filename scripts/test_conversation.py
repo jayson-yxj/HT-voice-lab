@@ -191,6 +191,86 @@ def check_conversation():
     assert retrying.stats()["confirmed_speakers"] == 1
     assert retrying.audit[-1]["decision"] == "voiceprint_match"
 
+    # Sortformer still has four local slots, but a slot reused in a later
+    # episode may create a fifth session identity after voiceprint checking.
+    def five_voice_embedding(audio):
+        result = np.zeros(5, dtype=np.float32)
+        result[int(round(float(np.mean(audio)))) - 1] = 1
+        return result
+
+    global_people = SpeakerStabilizer(
+        five_voice_embedding, confirm_samples=2, recheck_samples=1,
+        max_hold_samples=4, prototype_samples=4, max_speakers=8,
+        appearance_gap_samples=0, episode_gap_samples=3,
+        trusted_slot_reuse_samples=2)
+    global_frames = []
+    cursor = 0
+    for slot, value in enumerate((1, 2, 3, 4)):
+        global_frames.extend(global_people.push(
+            dict(start_sample=cursor, end_sample=cursor + 4, speakers=[slot]),
+            np.full(4, value, dtype=np.float32)))
+        cursor += 4
+    global_frames.extend(global_people.push(
+        dict(start_sample=cursor, end_sample=cursor + 4, speakers=[]),
+        np.zeros(4, dtype=np.float32)))
+    cursor += 4
+    global_frames.extend(global_people.push(
+        dict(start_sample=cursor, end_sample=cursor + 4, speakers=[0]),
+        np.full(4, 5, dtype=np.float32)))
+    global_frames.extend(global_people.finish())
+    spoken = [frame for frame, _ in global_frames if frame["raw_speakers"]]
+    assert global_people.stats()["confirmed_speakers"] == 5
+    assert global_people.stats()["episodes"] == 2
+    assert spoken[-1]["speaker_labels"] == ["E"]
+    assert spoken[-1]["speaker_episode_id"] == "episode-0002"
+    assert spoken[-1]["local_speaker_refs"] == ["episode-0002:slot-0"]
+
+    # A long gap inside one episode triggers a voiceprint check. The same raw
+    # slot may reuse its prior identity at the lower threshold, but only when
+    # that prior identity is still the best voiceprint match.
+    def slot_supported_embedding(audio):
+        if np.mean(audio) < 1.5:
+            return np.array([1.0, 0.0], dtype=np.float32)
+        return np.array([0.31, np.sqrt(1 - 0.31 ** 2)], dtype=np.float32)
+
+    slot_supported = SpeakerStabilizer(
+        slot_supported_embedding, confirm_samples=2, recheck_samples=1,
+        max_hold_samples=4, prototype_samples=4, appearance_gap_samples=0,
+        episode_gap_samples=20, trusted_slot_reuse_samples=2)
+    slot_supported.push(
+        dict(start_sample=0, end_sample=4, speakers=[0]),
+        np.ones(4, dtype=np.float32))
+    slot_supported.push(
+        dict(start_sample=4, end_sample=8, speakers=[]),
+        np.zeros(4, dtype=np.float32))
+    reused = slot_supported.push(
+        dict(start_sample=8, end_sample=12, speakers=[0]),
+        np.full(4, 2, dtype=np.float32))
+    reused.extend(slot_supported.finish())
+    assert slot_supported.stats()["confirmed_speakers"] == 1
+    assert slot_supported.audit[-1]["decision"] == "voiceprint_slot_match"
+    assert [frame["speaker_labels"] for frame, _ in reused if frame["raw_speakers"]] == [["A"]]
+
+    # An unresolved fragment must not refresh the recency of an older trusted
+    # slot; the next substantial appearance still needs voiceprint checking.
+    no_refresh = SpeakerStabilizer(
+        five_voice_embedding, confirm_samples=2, recheck_samples=1,
+        max_hold_samples=4, prototype_samples=4, appearance_gap_samples=0,
+        episode_gap_samples=20, trusted_slot_reuse_samples=2)
+    no_refresh.push(dict(start_sample=0, end_sample=4, speakers=[0]),
+                    np.ones(4, dtype=np.float32))
+    no_refresh.push(dict(start_sample=4, end_sample=8, speakers=[]),
+                    np.zeros(4, dtype=np.float32))
+    no_refresh.push(dict(start_sample=8, end_sample=9, speakers=[0]),
+                    np.full(1, 2, dtype=np.float32))
+    no_refresh.push(dict(start_sample=9, end_sample=10, speakers=[]),
+                    np.zeros(1, dtype=np.float32))
+    no_refresh.push(dict(start_sample=10, end_sample=14, speakers=[0]),
+                    np.full(4, 2, dtype=np.float32))
+    no_refresh.finish()
+    assert no_refresh.stats()["confirmed_speakers"] == 2
+    assert no_refresh.audit[-1]["speaker"] == "B"
+
     router = AttributionRouter(CaptureASR, lambda record, cost: None)
     feed(0, 1600, [], 3, attribution="short_unresolved",
          speaker_candidates=["A", "B", "未确认"], raw_speakers=[2],
