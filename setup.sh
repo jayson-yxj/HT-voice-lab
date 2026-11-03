@@ -6,7 +6,7 @@ unset PYTHONPATH LD_LIBRARY_PATH
 export PYTHONNOUSERSITE=1
 mkdir -p logs results data/raw data/prepared data/reference models
 if [[ ! -x .tools/bin/uv ]]; then
-  python3 -m pip install --target .tools uv==0.12.15
+  python3 -m pip install --index-url https://pypi.org/simple --target .tools uv==0.12.15
 fi
 .tools/bin/uv python install 3.11.16 --install-dir "$LAB_DIR/.python" --no-bin
 if [[ ! -x .venv/bin/python ]]; then
